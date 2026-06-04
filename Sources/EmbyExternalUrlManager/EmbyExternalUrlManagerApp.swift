@@ -15,10 +15,11 @@ struct EmbyExternalUrlManagerApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             ContentView()
                 .environmentObject(configService)
                 .frame(minWidth: 800, minHeight: 600)
+                .background(WindowOpener())
                 .onAppear {
                     NSApplication.shared.setActivationPolicy(.regular)
                     NSApplication.shared.activate(ignoringOtherApps: true)
@@ -28,9 +29,26 @@ struct EmbyExternalUrlManagerApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
+// MARK: - Bridge SwiftUI openWindow to AppDelegate
+struct WindowOpener: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                AppDelegate.openWindowAction = { [openWindow] in
+                    openWindow(id: "main")
+                }
+            }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    /// Bridge to SwiftUI's openWindow environment action — set by WindowOpener.onAppear
+    static var openWindowAction: (() -> Void)?
+
     private var statusItem: NSStatusItem?
-    private var windowProxies: [NSWindow: WindowDelegateProxy] = [:]
     private var menu: NSMenu?
     private var updateTimer: Timer?
 
@@ -55,8 +73,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         setupStatusItem()
         startTimer()
-
-        NotificationCenter.default.addObserver(self, selector: #selector(handleWindowDidBecomeKey), name: NSWindow.didBecomeKeyNotification, object: nil)
 
         // Initial fetch
         Task {
@@ -238,25 +254,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // has fully closed before we try to bring the window front.
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
-            let visibleWindows = NSApp.windows.filter {
-                $0.className != "NSStatusBarWindow" && $0.className != "NSMenuWindow"
+            let targetWindows = NSApp.windows.filter { window in
+                window.canBecomeKey &&
+                window.className != "NSStatusBarWindow" &&
+                window.className != "NSMenuWindow" &&
+                window.styleMask.contains(.titled)
             }
-            if let window = visibleWindows.first {
+            if let window = targetWindows.first {
+                if window.isMiniaturized {
+                    window.deminiaturize(nil)
+                }
                 window.makeKeyAndOrderFront(nil)
             } else {
-                NSApplication.shared.sendAction(Selector(("newWindow:")), to: nil, from: nil)
+                if let open = Self.openWindowAction {
+                    open()
+                }
             }
-        }
-    }
-
-    @objc private func handleWindowDidBecomeKey(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow else { return }
-        guard window.className != "NSStatusBarWindow" && window.className != "NSMenuWindow" else { return }
-        if !(window.delegate is WindowDelegateProxy) {
-            let original = window.delegate
-            let proxy = WindowDelegateProxy(originalDelegate: original)
-            windowProxies[window] = proxy
-            window.delegate = proxy
         }
     }
 
@@ -312,34 +325,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         alert.alertStyle = .warning
         alert.addButton(withTitle: "确定")
         alert.runModal()
-    }
-}
-
-// MARK: - Window Delegate Proxy
-final class WindowDelegateProxy: NSObject, NSWindowDelegate {
-    private weak var originalDelegate: NSWindowDelegate?
-
-    init(originalDelegate: NSWindowDelegate?) {
-        self.originalDelegate = originalDelegate
-        super.init()
-    }
-
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
-        return false
-    }
-
-    override func responds(to aSelector: Selector!) -> Bool {
-        if super.responds(to: aSelector) {
-            return true
-        }
-        return originalDelegate?.responds(to: aSelector) ?? false
-    }
-
-    override func forwardingTarget(for aSelector: Selector!) -> Any? {
-        if let original = originalDelegate, original.responds(to: aSelector) {
-            return original
-        }
-        return super.forwardingTarget(for: aSelector)
     }
 }
