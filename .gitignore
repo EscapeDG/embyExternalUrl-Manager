@@ -10,3 +10,6 @@ RustCore/target/
 
 # Local release artifacts
 dist/
+
+# Local release branch worktrees
+.release-worktrees/
