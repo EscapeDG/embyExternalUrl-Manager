@@ -1,0 +1,12 @@
+# macOS desktop metadata
+.DS_Store
+
+# SwiftPM and Xcode generated state
+.build/
+.swiftpm/xcode/
+
+# Rust build output
+RustCore/target/
+
+# Local release artifacts
+dist/
