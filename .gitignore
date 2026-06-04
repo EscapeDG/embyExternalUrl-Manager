@@ -13,3 +13,7 @@ dist/
 
 # Local release branch worktrees
 .release-worktrees/
+
+# Local agent rules
+AGENTS.md
+.local-rules/
