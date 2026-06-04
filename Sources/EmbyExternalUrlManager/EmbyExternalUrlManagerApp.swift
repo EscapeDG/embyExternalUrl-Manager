@@ -28,7 +28,7 @@ struct EmbyExternalUrlManagerApp: App {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem?
     private var menu: NSMenu?
     private var updateTimer: Timer?
@@ -55,6 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupStatusItem()
         startTimer()
 
+        NotificationCenter.default.addObserver(self, selector: #selector(handleWindowDidBecomeKey), name: NSWindow.didBecomeKeyNotification, object: nil)
+
         // Initial fetch
         Task {
             await refreshStatus()
@@ -72,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            sender.sendAction(Selector(("newWindow:")), to: nil, from: nil)
+            showMainWindow()
         }
         sender.activate(ignoringOtherApps: true)
         return true
@@ -240,6 +242,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             NSApplication.shared.sendAction(Selector(("newWindow:")), to: nil, from: nil)
         }
+    }
+
+    @objc private func handleWindowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        guard window.className != "NSStatusBarWindow" && window.className != "NSMenuWindow" else { return }
+        if window.delegate == nil {
+            window.delegate = self
+        }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
     }
 
     @objc private func startContainer() {
