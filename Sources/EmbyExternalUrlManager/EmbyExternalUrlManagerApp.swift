@@ -30,6 +30,7 @@ struct EmbyExternalUrlManagerApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem?
+    private var windowProxies: [NSWindow: WindowDelegateProxy] = [:]
     private var menu: NSMenu?
     private var updateTimer: Timer?
 
@@ -247,14 +248,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func handleWindowDidBecomeKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         guard window.className != "NSStatusBarWindow" && window.className != "NSMenuWindow" else { return }
-        if window.delegate == nil {
-            window.delegate = self
+        if !(window.delegate is WindowDelegateProxy) {
+            let original = window.delegate
+            let proxy = WindowDelegateProxy(originalDelegate: original)
+            windowProxies[window] = proxy
+            window.delegate = proxy
         }
-    }
-
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
-        return false
     }
 
     @objc private func startContainer() {
@@ -309,5 +308,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         alert.alertStyle = .warning
         alert.addButton(withTitle: "确定")
         alert.runModal()
+    }
+}
+
+// MARK: - Window Delegate Proxy
+final class WindowDelegateProxy: NSObject, NSWindowDelegate {
+    private weak var originalDelegate: NSWindowDelegate?
+
+    init(originalDelegate: NSWindowDelegate?) {
+        self.originalDelegate = originalDelegate
+        super.init()
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+
+    override func responds(to aSelector: Selector!) -> Bool {
+        if super.responds(to: aSelector) {
+            return true
+        }
+        return originalDelegate?.responds(to: aSelector) ?? false
+    }
+
+    override func forwardingTarget(for aSelector: Selector!) -> Any? {
+        if let original = originalDelegate, original.responds(to: aSelector) {
+            return original
+        }
+        return super.forwardingTarget(for: aSelector)
     }
 }
