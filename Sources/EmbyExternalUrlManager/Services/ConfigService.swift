@@ -170,8 +170,9 @@ final class ConfigService: ObservableObject {
 
         for (name, templateName, destURL) in templates {
             // Check in type-specific templates directory first, fallback to common Templates
-            guard let templatePath = Bundle.module.url(forResource: "\(templateSubfolder)/\(templateName)", withExtension: nil)
-                    ?? Bundle.module.url(forResource: "Templates/\(templateName)", withExtension: nil),
+            let bundle = ConfigService.templatesBundle
+            guard let templatePath = bundle.url(forResource: "\(templateSubfolder)/\(templateName)", withExtension: nil)
+                    ?? bundle.url(forResource: "Templates/\(templateName)", withExtension: nil),
                   let templateContent = try? String(contentsOf: templatePath, encoding: .utf8) else {
                 errors.append("Template \(templateName) not found")
                 continue
@@ -279,5 +280,28 @@ final class ConfigService: ObservableObject {
             return "[]"
         }
         return str
+    }
+
+    private static var templatesBundle: Bundle {
+        let mainBundle = Bundle.main
+        if let resourceURL = mainBundle.resourceURL {
+            let bundleURL = resourceURL.appendingPathComponent("embyExternalUrl-Manager_EmbyExternalUrlManager.bundle")
+            if let b = Bundle(url: bundleURL) {
+                return b
+            }
+            let oldBundleURL = resourceURL.appendingPathComponent("Plex2AlistManager_Plex2AlistManager.bundle")
+            if let b = Bundle(url: oldBundleURL) {
+                return b
+            }
+        }
+        let bundleURL = mainBundle.bundleURL.appendingPathComponent("embyExternalUrl-Manager_EmbyExternalUrlManager.bundle")
+        if let b = Bundle(url: bundleURL) {
+            return b
+        }
+        let oldBundleURL = mainBundle.bundleURL.appendingPathComponent("Plex2AlistManager_Plex2AlistManager.bundle")
+        if let b = Bundle(url: oldBundleURL) {
+            return b
+        }
+        return mainBundle
     }
 }
