@@ -157,7 +157,6 @@ final class ConfigService: ObservableObject {
             ("constant-transcode.js", "constant-transcode.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-transcode.js")),
             ("http.conf", "http.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("http.conf")),
             ("https.conf", "https.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("https.conf")),
-            ("docker-compose.yml", "docker-compose.yml", URL(fileURLWithPath: deployDir).appendingPathComponent("docker-compose.yml")),
         ]
 
         if config.mediaServerType != .plex {
