@@ -101,7 +101,8 @@ final class ExistingConfigScanner {
         guard let match = regex.firstMatch(in: text, range: range),
               match.numberOfRanges > 1,
               let valueRange = Range(match.range(at: 1), in: text) else { return nil }
-        return String(text[valueRange]).trimmingCharacters(in: .whitespaces)
+        let val = String(text[valueRange]).trimmingCharacters(in: .whitespaces)
+        return val.replacingOccurrences(of: "\\/", with: "/")
     }
 
     /// 提取布尔常量: const xxx = true/false;
@@ -167,7 +168,8 @@ final class ExistingConfigScanner {
         return itemMatches.compactMap { m in
             guard m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: arrayContent) else { return nil }
             let val = String(arrayContent[r])
-            return val.trimmingCharacters(in: .whitespaces).isEmpty ? nil : val.trimmingCharacters(in: .whitespaces)
+            let cleanVal = val.trimmingCharacters(in: .whitespaces)
+            return cleanVal.isEmpty ? nil : cleanVal.replacingOccurrences(of: "\\/", with: "/")
         }
     }
 
@@ -182,8 +184,8 @@ final class ExistingConfigScanner {
             guard match.numberOfRanges > 2,
                   let fromRange = Range(match.range(at: 1), in: text),
                   let toRange = Range(match.range(at: 2), in: text) else { continue }
-            let from = String(text[fromRange])
-            let to = String(text[toRange])
+            let from = String(text[fromRange]).replacingOccurrences(of: "\\/", with: "/")
+            let to = String(text[toRange]).replacingOccurrences(of: "\\/", with: "/")
             if !from.isEmpty && !to.isEmpty {
                 result.append((from, to))
             }

@@ -263,12 +263,14 @@ final class ConfigService: ObservableObject {
 
     private func jsonString(_ value: String) -> String {
         let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
-        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
+        let str = data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
+        return str.replacingOccurrences(of: "\\/", with: "/")
     }
 
     private func jsonArray(_ values: [String]) -> String {
         let data = try? JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted])
-        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        let str = data.flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+        return str.replacingOccurrences(of: "\\/", with: "/")
     }
 
     private func mediaPathMappingJS(_ mappings: [PathMapping]) -> String {
@@ -278,7 +280,7 @@ final class ConfigService: ObservableObject {
               let str = String(data: data, encoding: .utf8) else {
             return "[]"
         }
-        return str
+        return str.replacingOccurrences(of: "\\/", with: "/")
     }
 
     private static var templatesBundle: Bundle {
