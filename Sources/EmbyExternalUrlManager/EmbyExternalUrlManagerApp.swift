@@ -234,14 +234,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     // MARK: - Actions
 
     @objc private func showMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        let visibleWindows = NSApp.windows.filter {
-            $0.className != "NSStatusBarWindow" && $0.className != "NSMenuWindow"
-        }
-        if let window = visibleWindows.first {
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            NSApplication.shared.sendAction(Selector(("newWindow:")), to: nil, from: nil)
+        // Defer to the next runloop cycle so the status-bar menu
+        // has fully closed before we try to bring the window front.
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            let visibleWindows = NSApp.windows.filter {
+                $0.className != "NSStatusBarWindow" && $0.className != "NSMenuWindow"
+            }
+            if let window = visibleWindows.first {
+                window.makeKeyAndOrderFront(nil)
+            } else {
+                NSApplication.shared.sendAction(Selector(("newWindow:")), to: nil, from: nil)
+            }
         }
     }
 
