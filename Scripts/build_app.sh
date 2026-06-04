@@ -10,8 +10,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="embyExternalUrl-Manager"
 BUNDLE_ID="com.embyexternalurl.manager"
-VERSION="1.1.0"
-BUILD_NUMBER="110"
+VERSION="1.0.0"
+BUILD_NUMBER="100"
 DIST_DIR="${PROJECT_DIR}/dist"
 APP_DIR="${DIST_DIR}/${APP_NAME}.app"
 MACOS_DIR="${APP_DIR}/Contents/MacOS"
@@ -61,9 +61,9 @@ echo "📦 Copying Rust core to app bundle..."
 install -m 755 "$CORE_BIN" "${MACOS_DIR}/plex2alist-core"
 
 echo "📦 Copying resource bundle..."
-BUNDLE_SRC="${PROJECT_DIR}/.build/release/EmbyExternalUrlManager_EmbyExternalUrlManager.bundle"
+BUNDLE_SRC="${PROJECT_DIR}/.build/release/embyExternalUrl-Manager_EmbyExternalUrlManager.bundle"
 if [ -d "$BUNDLE_SRC" ]; then
-    cp -R "$BUNDLE_SRC" "${RESOURCES_DIR}/EmbyExternalUrlManager_EmbyExternalUrlManager.bundle"
+    cp -R "$BUNDLE_SRC" "${RESOURCES_DIR}/embyExternalUrl-Manager_EmbyExternalUrlManager.bundle"
     echo "  ✅ Resource bundle copied"
 else
     echo "  ⚠️  Resource bundle not found at $BUNDLE_SRC"

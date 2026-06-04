@@ -93,7 +93,7 @@ fn main() {
             if result.exit_code == 0 { 0 } else { 1 }
         }
         Some("--version") | Some("-V") => {
-            println!("plex2alist-core 1.1.0");
+            println!("plex2alist-core 1.0.0");
             0
         }
         _ => {
