@@ -262,7 +262,7 @@ final class ConfigService: ObservableObject {
     // MARK: - Helpers
 
     private func jsonString(_ value: String) -> String {
-        let data = try? JSONSerialization.data(withJSONObject: value, options: [])
+        let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
     }
 
