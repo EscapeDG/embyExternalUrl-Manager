@@ -37,11 +37,27 @@ Emby / Jellyfin / Plex
 ```bash
 swift build
 cargo test --manifest-path RustCore/Cargo.toml
+cargo build --release --manifest-path RustCore/Cargo.toml
 ./Scripts/build_app.sh
 ./Scripts/package_dmg.sh
 ```
 
 构建完成后，应用包会输出到 `dist/embyExternalUrl-Manager.app`，DMG 会输出到 `dist/embyExternalUrl-Manager-版本号.dmg`。
+
+## 安全说明
+
+- 本地配置会保存在用户的 Application Support 目录中。
+- OpenList Token、服务地址和证书相关路径属于敏感信息，请不要提交到公开仓库或 issue。
+- 当前版本尚未把 OpenList Token 迁移到 macOS Keychain。
+- 未使用 Developer ID 签名和 Apple 公证的 DMG 可能会被 Gatekeeper 拦截。
+
+更多报告安全问题的方式见 `SECURITY.md`。
+
+## 许可证
+
+本项目以 MIT License 开源，详见 `LICENSE`。
+
+上游 `bpking1/embyExternalUrl` 同样采用 MIT License。上游版权和许可说明见 `NOTICE`，使用或分发本项目时也请遵守上游项目的许可要求。
 
 ## 项目关系
 
