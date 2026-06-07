@@ -21,7 +21,7 @@ struct DockerInstallView: View {
                 }
 
                 if let lastResult {
-                    commandResultView(title: "安装命令", result: lastResult)
+                    CommandOutputView(title: "安装命令", result: lastResult)
                 }
 
                 Spacer()
@@ -60,7 +60,26 @@ struct DockerInstallView: View {
             InfoRow(label: "Compose", value: status.composeVersion.isEmpty ? "-" : status.composeVersion)
             InfoRow(label: "Engine", value: status.engineVersion.isEmpty ? "-" : status.engineVersion)
             InfoRow(label: "Context", value: status.dockerContext.isEmpty ? "-" : status.dockerContext)
-            InfoRow(label: "Homebrew", value: status.homebrewPath.isEmpty ? "未找到" : status.homebrewPath)
+            HStack(alignment: .top) {
+                Text("Homebrew")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(width: 80, alignment: .trailing)
+                Text(status.homebrewPath.isEmpty ? "未找到" : status.homebrewPath)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                if status.homebrewPath.isEmpty {
+                    Text("(")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Link("安装指引", destination: URL(string: "https://brew.sh")!)
+                        .font(.caption)
+                    Text(")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
         }
         .padding(12)
         .background(Color.secondary.opacity(0.06))
@@ -195,33 +214,5 @@ struct DockerInstallView: View {
         Text(title).font(.title3).fontWeight(.semibold)
     }
 
-    private func commandResultView(title: String, result: CommandResult) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .fontWeight(.medium)
-                Spacer()
-                Text(result.exitCode == 0 ? "已打开" : "失败 \(result.exitCode)")
-                    .font(.caption)
-                    .foregroundColor(result.exitCode == 0 ? .green : .red)
-            }
-            Text(result.command)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-            if !result.stdout.isEmpty {
-                Text(result.stdout)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            if !result.stderr.isEmpty {
-                Text(result.stderr)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.red)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(12)
-        .background(Color.secondary.opacity(0.06))
-        .cornerRadius(8)
-    }
+
 }

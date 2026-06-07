@@ -1,5 +1,15 @@
 # embyExternalUrl-Manager Release Notes
 
+## 1.0.2 (102)
+
+- UI 架构升级：由原先传统的 TabView 标签页页面转换到了高颜值的双栏侧边栏 (`SidebarView`) 与仪表盘 (`DashboardView`) 架构，提升应用视觉质感并精简了导航流。
+- 修复了路径映射页面的数据持久化 Bug：新增底部“保存配置”按钮底栏与弹框 Alert 反馈逻辑，确保所有对路径挂载与路径映射的前端配置变动都可被安全且原子地持久化写入磁盘。
+- 统一了配置保存反馈交互：将 ConnectionView（连接）、RedirectSettingsView（302 控制）与 PathMappingView（路径映射）三处页面的保存统一为了“保存配置”文案并配置了统一的“已保存”弹框，解决了之前保存反馈有无、按钮文本各异的不一致缺陷。
+- 清理废弃 Diagnostics 视图：彻底物理删除旧有冗余的 `DiagnosticsView.swift` 文件，将诊断系统完全归入 Dashboard 仪表盘页的“运行诊断”列表中。
+- 优化长耗时任务在等待期间的用户反馈：在 UpstreamSyncView 处的上游 Git 同步期间，以及 CertificateView 处的 PFX 证书更新、acme.sh 自动化更新任务中增加了详细的在运行说明文本，杜绝了由于网络开销或外部脚本启动时只显示静态 ProgressView 菊花所引起的假死体验。
+- 增加 Docker 页面的 Homebrew 补全指引：在 Docker 状态检测页面中，若本地未检测到 brew 环境，在“未找到”旁新增了可直接跳转到官网的 `安装指引` 链接。
+- 修复「生成与部署」页模块居中缩水问题：更新全局 `FormGroupBoxStyle` 样式并对 `GenerateView` 的内部 `VStack` 的最大宽度设定为 `.frame(maxWidth: .infinity, alignment: .leading)`，使得整页在内容较窄时依然可以美观地左对齐拉伸撑满屏幕，恢复界面统一观感。
+
 ## 1.0.1 (101)
 
 - 修复了在“生成配置”时，由于 JSONSerialization 对顶级非字典/非数组类型（String）序列化选项缺失 `.fragmentsAllowed` 导致的 App 崩溃闪退 Bug。

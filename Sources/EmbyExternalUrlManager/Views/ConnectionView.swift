@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Media server connection configuration (Plex / Emby / Jellyfin) + OpenList + paths.
 struct ConnectionView: View {
     @EnvironmentObject var configService: ConfigService
     @State private var showSaveAlert = false
@@ -11,36 +12,108 @@ struct ConnectionView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                header("媒体服务器设置")
+                // MARK: Media Server
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Picker("媒体服务器类型", selection: $configService.config.mediaServerType) {
+                            ForEach(MediaServerType.allCases, id: \.self) { type in
+                                Text(type.rawValue).tag(type)
+                            }
+                        }
+                        .pickerStyle(.segmented)
 
-                Picker("媒体服务器类型", selection: $configService.config.mediaServerType) {
-                    ForEach(MediaServerType.allCases, id: \.self) { type in
-                        Text(type.rawValue).tag(type)
+                        switch configService.config.mediaServerType {
+                        case .plex:
+                            plexSection
+                        case .emby:
+                            embySection
+                        case .jellyfin:
+                            jellyfinSection
+                        }
                     }
+                } label: {
+                    Label("媒体服务器", systemImage: "cable.connector")
+                        .font(.headline)
                 }
-                .pickerStyle(.segmented)
+                .groupBoxStyle(FormGroupBoxStyle())
+                .id(configService.config.mediaServerType) // Force rebuild on type switch
 
-                switch configService.config.mediaServerType {
-                case .plex:
-                    plexSection
-                case .emby:
-                    embySection
-                case .jellyfin:
-                    jellyfinSection
+                // MARK: OpenList
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        FormField(label: "服务器地址") {
+                            TextField("http://127.0.0.1:5244", text: $configService.config.openList.serverURL)
+                        }
+                        FormField(label: "Token") {
+                            SecureField("输入 OpenList Token", text: $configService.config.openList.token)
+                        }
+                        FormField(label: "公网地址") {
+                            VStack(alignment: .leading) {
+                                TextField("留空则使用服务器地址", text: $configService.config.openList.publicURL)
+                                Text("用于客户端自请求直链的场景，如 115 网盘需要公网可访问的地址")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("OpenList 直链后端", systemImage: "link")
+                        .font(.headline)
                 }
+                .groupBoxStyle(FormGroupBoxStyle())
 
-                Divider()
+                // MARK: Paths
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        FormField(label: "部署目录") {
+                            VStack(alignment: .leading) {
+                                HStack {
+                                    TextField("默认: App Support 下自动创建", text: $configService.config.deploymentDirectory)
+                                        .font(.system(.body, design: .monospaced))
+                                    Button("选择") { selectFolder { configService.config.deploymentDirectory = $0 } }
+                                        .buttonStyle(.bordered)
+                                }
+                                Text("存放 docker-compose.yml 和运行时日志的目录")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        FormField(label: "nginx 配置目录") {
+                            VStack(alignment: .leading) {
+                                HStack {
+                                    TextField("默认: 部署目录下的 nginx/", text: $configService.config.nginxConfigDirectory)
+                                        .font(.system(.body, design: .monospaced))
+                                    Button("选择") { selectFolder { configService.config.nginxConfigDirectory = $0 } }
+                                        .buttonStyle(.bordered)
+                                    Button("扫描已有配置") { scanExistingConfig() }
+                                        .buttonStyle(.borderedProminent)
+                                }
+                                Text("包含 nginx.conf 和 conf.d/ 的目录，配置生成时会覆盖 constant*.js")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
 
-                header("OpenList 直链后端")
-                openListSection
+                        // Scan result feedback
+                        if let msg = scanMessage {
+                            HStack(spacing: 6) {
+                                Image(systemName: scanSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                    .foregroundColor(scanSuccess ? .green : .orange)
+                                    .font(.caption)
+                                Text(msg)
+                                    .font(.caption)
+                                    .foregroundColor(scanSuccess ? .green : .orange)
+                            }
+                            .padding(.leading, 4)
+                        }
+                    }
+                } label: {
+                    Label("路径设置", systemImage: "folder")
+                        .font(.headline)
+                }
+                .groupBoxStyle(FormGroupBoxStyle())
 
-                Divider()
-
-                header("路径设置")
-                pathSection
-
-                Spacer()
-
+                // MARK: Save
                 HStack {
                     Button("保存配置") {
                         configService.save()
@@ -53,13 +126,15 @@ struct ConnectionView: View {
                     }
                     .buttonStyle(.bordered)
                 }
+
+                Spacer()
             }
             .padding(24)
         }
         .alert("已保存", isPresented: $showSaveAlert) {
             Button("确定", role: .cancel) {}
         }
-        .navigationTitle("连接配置")
+        .navigationTitle("媒体服务器")
     }
 
     // MARK: - Plex Section
@@ -169,82 +244,7 @@ struct ConnectionView: View {
         }
     }
 
-    // MARK: - OpenList Section
-
-    private var openListSection: some View {
-        VStack(spacing: 12) {
-            FormField(label: "服务器地址") {
-                TextField("http://127.0.0.1:5244", text: $configService.config.openList.serverURL)
-            }
-            FormField(label: "Token") {
-                SecureField("输入 OpenList Token", text: $configService.config.openList.token)
-            }
-            FormField(label: "公网地址") {
-                VStack(alignment: .leading) {
-                    TextField("留空则使用服务器地址", text: $configService.config.openList.publicURL)
-                    Text("用于客户端自请求直链的场景，如 115 网盘需要公网可访问的地址")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-        }
-    }
-
-    // MARK: - Path Section
-
-    private var pathSection: some View {
-        VStack(spacing: 12) {
-            FormField(label: "部署目录") {
-                VStack(alignment: .leading) {
-                    HStack {
-                        TextField("默认: App Support 下自动创建", text: $configService.config.deploymentDirectory)
-                            .font(.system(.body, design: .monospaced))
-                        Button("选择") { selectFolder { configService.config.deploymentDirectory = $0 } }
-                            .buttonStyle(.bordered)
-                    }
-                    Text("存放 docker-compose.yml 和运行时日志的目录")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            FormField(label: "nginx 配置目录") {
-                VStack(alignment: .leading) {
-                    HStack {
-                        TextField("默认: 部署目录下的 nginx/", text: $configService.config.nginxConfigDirectory)
-                            .font(.system(.body, design: .monospaced))
-                        Button("选择") { selectFolder { configService.config.nginxConfigDirectory = $0 } }
-                            .buttonStyle(.bordered)
-                        Button("扫描已有配置") { scanExistingConfig() }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    Text("包含 nginx.conf 和 conf.d/ 的目录，配置生成时会覆盖 constant*.js")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            // 扫描结果显示
-            if let msg = scanMessage {
-                HStack(spacing: 6) {
-                    Image(systemName: scanSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundColor(scanSuccess ? .green : .orange)
-                        .font(.caption)
-                    Text(msg)
-                        .font(.caption)
-                        .foregroundColor(scanSuccess ? .green : .orange)
-                }
-                .padding(.leading, 4)
-            }
-        }
-    }
-
     // MARK: - Helpers
-
-    private func header(_ text: String) -> some View {
-        Text(text)
-            .font(.title2)
-            .fontWeight(.semibold)
-    }
 
     private func selectFolder(_ completion: @escaping (String) -> Void) {
         let panel = NSOpenPanel()
@@ -286,7 +286,6 @@ struct ConnectionView: View {
                 if let v = scanned.proxyHttpsPort { configService.config.plex.proxyHttpsPort = v; filled.append("HTTPS 端口") }
             }
         } else {
-            // fallback
             if let v = scanned.serverURL ?? scanned.plexURL {
                 if configService.config.mediaServerType == .emby {
                     configService.config.emby.serverURL = v
@@ -331,13 +330,11 @@ struct ConnectionView: View {
         if let v = scanned.routeCacheEnabled { configService.config.redirect.routeCacheEnabled = v; filled.append("缓存开关") }
         if let v = scanned.fallbackUseOriginal { configService.config.redirect.fallbackUseOriginal = v; filled.append("回源策略") }
 
-        // 挂载路径
         if !scanned.mediaMountPaths.isEmpty {
             configService.config.mount.mediaMountPaths = scanned.mediaMountPaths
             filled.append("挂载路径")
         }
 
-        // 路径映射
         if !scanned.pathMappings.isEmpty {
             configService.config.pathMappings = scanned.pathMappings.map {
                 PathMapping(localPrefix: $0.local, remotePrefix: $0.remote, enabled: true)
@@ -356,19 +353,4 @@ struct ConnectionView: View {
     }
 }
 
-// MARK: - Form Field Component
 
-struct FormField<Content: View>: View {
-    let label: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(.secondary)
-            content
-        }
-    }
-}

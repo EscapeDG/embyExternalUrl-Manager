@@ -68,7 +68,7 @@ struct UpstreamSyncView: View {
 
                     FormField(label: "本地上游") {
                         directoryRow(
-                            placeholder: "~/Projects/embyExternalUrl",
+                            placeholder: "/Users/song/Desktop/plex",
                             text: $upstreamDirectory,
                             buttonTitle: "选择上游"
                         )
@@ -109,17 +109,22 @@ struct UpstreamSyncView: View {
                     .disabled(isWorking || upstreamDirectory.isEmpty)
 
                     if isWorking {
-                        ProgressView()
-                            .scaleEffect(0.75)
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.75)
+                            Text("正在同步上游，请稍候（这可能需要一些时间）...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
 
                 if let onlineResult {
-                    commandResultView(title: "在线上游更新", result: onlineResult)
+                    CommandOutputView(title: "在线上游更新", result: onlineResult)
                 }
 
                 if let localPullResult {
-                    commandResultView(title: "本地 Git 拉取", result: localPullResult)
+                    CommandOutputView(title: "本地 Git 拉取", result: localPullResult)
                 }
 
                 if let syncReport {
@@ -127,7 +132,7 @@ struct UpstreamSyncView: View {
                 }
 
                 if let reloadResult {
-                    commandResultView(title: "nginx reload", result: reloadResult)
+                    CommandOutputView(title: "nginx reload", result: reloadResult)
                 }
 
                 Spacer()
@@ -322,35 +327,7 @@ struct UpstreamSyncView: View {
         }
     }
 
-    private func commandResultView(title: String, result: CommandResult) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .fontWeight(.medium)
-                Spacer()
-                Text(result.exitCode == 0 ? "成功" : "失败 \(result.exitCode)")
-                    .font(.caption)
-                    .foregroundColor(result.exitCode == 0 ? .green : .red)
-            }
-            Text(result.command)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-            if !result.stdout.isEmpty {
-                Text(result.stdout)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            if !result.stderr.isEmpty {
-                Text(result.stderr)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.red)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(12)
-        .background(Color.secondary.opacity(0.06))
-        .cornerRadius(8)
-    }
+
 
     private func selectFolder(_ completion: @escaping (String) -> Void) {
         let panel = NSOpenPanel()

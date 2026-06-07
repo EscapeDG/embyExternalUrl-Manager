@@ -9,7 +9,7 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$PROJECT_DIR"
 
 APP_NAME="embyExternalUrl-Manager"
-VERSION="1.0.1"
+VERSION="1.0.2"
 DIST_DIR="${PROJECT_DIR}/dist"
 APP_DIR="${DIST_DIR}/${APP_NAME}.app"
 DMG_ROOT="${DIST_DIR}/dmg-root"
