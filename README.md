@@ -44,14 +44,14 @@ cargo build --release --manifest-path RustCore/Cargo.toml
 
 构建完成后，应用包会输出到 `dist/embyExternalUrl-Manager.app`，DMG 会输出到 `dist/embyExternalUrl-Manager-版本号.dmg`。
 
-## 安全说明
+## 测试现状与已知限制
 
-- 本地配置会保存在用户的 Application Support 目录中。
-- OpenList Token、服务地址和证书相关路径属于敏感信息，请不要提交到公开仓库或 issue。
-- 当前版本尚未把 OpenList Token 迁移到 macOS Keychain。
-- 未使用 Developer ID 签名和 Apple 公证的 DMG 可能会被 Gatekeeper 拦截。
+- **测试现状**：目前主要在 macOS 宿主机 **Plex** 配合 Docker Nginx/njs 及 OpenList 后端下完成了全链路 302 拦截播放的 smoke test。
+- **Emby/Jellyfin 状态**：虽然界面和核心代码已同步继承了上游的 302 配置文件生成与管理能力，但由于个人缺乏真实的 Emby/Jellyfin 测试环境，**尚未经过完整的生产联调验证**，非常欢迎有环境的用户测试并提 Issue 反馈。
+- **凭据安全**：当前版本尚未把 OpenList Token 迁移到 macOS Keychain，目前以明文形式保存在用户的 Application Support 配置目录中。请不要在公开 issue 中暴露该敏感信息。
+- **系统拦截**：未使用 Developer ID 签名和 Apple 公证的 DMG 可能会被 Gatekeeper 拦截。
 
-更多报告安全问题的方式见 `SECURITY.md`。
+更多安全说明与报告漏洞方式见 `SECURITY.md`。
 
 ## 许可证
 
