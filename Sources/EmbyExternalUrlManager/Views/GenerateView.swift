@@ -100,19 +100,26 @@ struct GenerateView: View {
                                 Task { await dockerService.up(directory: configService.ensureDeploymentDirectory()) }
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(!dockerService.isAvailable || dockerService.containerRunning)
+                            .disabled(!dockerService.isAvailable || dockerService.containerRunning || dockerService.isBusy)
 
                             Button("重启") {
                                 Task { await dockerService.restart(directory: configService.ensureDeploymentDirectory()) }
                             }
                             .buttonStyle(.bordered)
-                            .disabled(!dockerService.isAvailable || !dockerService.containerRunning)
+                            .disabled(!dockerService.isAvailable || !dockerService.containerRunning || dockerService.isBusy)
 
                             Button("停止") {
                                 Task { await dockerService.down(directory: configService.ensureDeploymentDirectory()) }
                             }
                             .buttonStyle(.bordered)
-                            .disabled(!dockerService.isAvailable || !dockerService.containerRunning)
+                            .disabled(!dockerService.isAvailable || !dockerService.containerRunning || dockerService.isBusy)
+
+                            if dockerService.isBusy {
+                                ProgressView().scaleEffect(0.7)
+                                Text("容器操作进行中…")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
                         }
 
                         if let result = composeResult {
@@ -224,13 +231,18 @@ struct GenerateView: View {
     private func reportSummary(_ report: DeploymentReport) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if report.errors.isEmpty {
-                Label("配置生成成功", systemImage: "checkmark.circle.fill").foregroundColor(.green)
+                Label(report.warnings.isEmpty ? "配置生成成功" : "配置已生成（有警告）",
+                      systemImage: report.warnings.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundColor(report.warnings.isEmpty ? .green : .orange)
             } else {
                 Label("生成失败", systemImage: "xmark.circle.fill").foregroundColor(.red)
             }
             Text("目录: \(report.targetDirectory)").font(.caption).foregroundColor(.secondary)
             ForEach(report.filesWritten, id: \.self) { file in
                 Text("✓ \(URL(fileURLWithPath: file).lastPathComponent)").font(.caption).foregroundColor(.secondary)
+            }
+            ForEach(report.warnings, id: \.self) { warning in
+                Text("⚠ \(warning)").font(.caption).foregroundColor(.orange)
             }
             ForEach(report.errors, id: \.self) { error in
                 Text("✗ \(error)").font(.caption).foregroundColor(.red)

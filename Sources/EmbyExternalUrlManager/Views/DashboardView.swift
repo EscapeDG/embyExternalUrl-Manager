@@ -56,9 +56,7 @@ struct DashboardView: View {
                     .font(.headline)
                     .fontWeight(.semibold)
                 Spacer()
-                MetricBadge(configService.config.mediaServerType == .plex
-                            ? "\(configService.config.plex.proxyPort):\(configService.config.plex.proxyHttpsPort)"
-                            : "\(configService.config.emby.proxyPort):\(configService.config.emby.proxyHttpsPort)")
+                MetricBadge("\(httpPort):\(httpsPort)")
             }
 
             Divider()

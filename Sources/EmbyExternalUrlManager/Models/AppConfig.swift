@@ -170,6 +170,21 @@ struct OpenListSettings: Codable, Equatable {
     var publicURL: String = ""
     var signEnabled: Bool = false
     var signExpireHours: Int = 12
+
+    enum CodingKeys: String, CodingKey {
+        case serverURL, token, publicURL, signEnabled, signExpireHours
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        serverURL = try container.decodeIfPresent(String.self, forKey: .serverURL) ?? "http://127.0.0.1:5244"
+        token = try container.decodeIfPresent(String.self, forKey: .token) ?? ""
+        publicURL = try container.decodeIfPresent(String.self, forKey: .publicURL) ?? ""
+        signEnabled = try container.decodeIfPresent(Bool.self, forKey: .signEnabled) ?? false
+        signExpireHours = try container.decodeIfPresent(Int.self, forKey: .signExpireHours) ?? 12
+    }
 }
 
 // MARK: - Redirect / 302 Control
@@ -243,6 +258,17 @@ struct RedirectSettings: Codable, Equatable {
 
 struct MountSettings: Codable, Equatable {
     var mediaMountPaths: [String] = ["/mnt"]
+
+    enum CodingKeys: String, CodingKey {
+        case mediaMountPaths
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mediaMountPaths = try container.decodeIfPresent([String].self, forKey: .mediaMountPaths) ?? ["/mnt"]
+    }
 }
 
 // MARK: - Path Mapping
@@ -253,6 +279,27 @@ struct PathMapping: Codable, Equatable, Identifiable {
     var remotePrefix: String = ""
     var enabled: Bool = true
     var note: String = ""
+
+    enum CodingKeys: String, CodingKey {
+        case id, localPrefix, remotePrefix, enabled, note
+    }
+
+    init(id: UUID = .init(), localPrefix: String = "", remotePrefix: String = "", enabled: Bool = true, note: String = "") {
+        self.id = id
+        self.localPrefix = localPrefix
+        self.remotePrefix = remotePrefix
+        self.enabled = enabled
+        self.note = note
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        localPrefix = try container.decodeIfPresent(String.self, forKey: .localPrefix) ?? ""
+        remotePrefix = try container.decodeIfPresent(String.self, forKey: .remotePrefix) ?? ""
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
+    }
 }
 
 // MARK: - Diagnostic Result

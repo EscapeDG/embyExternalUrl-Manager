@@ -12,6 +12,7 @@ final class ConfigService: ObservableObject {
 
     @Published var config: AppConfig = .init()
     @Published var lastReport: DeploymentReport?
+    @Published var lastPersistenceError: String?
 
     private init() {
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -27,23 +28,42 @@ final class ConfigService: ObservableObject {
     // MARK: - Load / Save
 
     func load() {
-        guard let data = try? Data(contentsOf: configFileURL),
-              let decoded = try? JSONDecoder().decode(AppConfig.self, from: data) else {
+        lastPersistenceError = nil
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: configFileURL.path) else {
             config = AppConfig()
             return
         }
-        config = decoded
+        do {
+            let data = try Data(contentsOf: configFileURL)
+            config = try JSONDecoder().decode(AppConfig.self, from: data)
+        } catch {
+            let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+            let backupURL = backupDirURL.appendingPathComponent("config.corrupt.\(stamp).json")
+            try? fm.copyItem(at: configFileURL, to: backupURL)
+            lastPersistenceError = "配置文件无法解析，已备份并恢复默认。\(backupURL.lastPathComponent)"
+            config = AppConfig()
+        }
     }
 
-    func save() {
-        try? FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
-        guard let data = try? JSONEncoder().encode(config) else { return }
-        try? data.write(to: configFileURL, options: .atomic)
+    @discardableResult
+    func save() -> Bool {
+        lastPersistenceError = nil
+        do {
+            try FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(config)
+            try data.write(to: configFileURL, options: .atomic)
+            return true
+        } catch {
+            lastPersistenceError = "保存失败：\(error.localizedDescription)"
+            return false
+        }
     }
 
-    func resetToDefaults() {
+    @discardableResult
+    func resetToDefaults() -> Bool {
         config = AppConfig()
-        save()
+        return save()
     }
 
     // MARK: - Deployment Directory
@@ -87,7 +107,7 @@ final class ConfigService: ObservableObject {
         let config = self.config
         var variables: [String: String] = [:]
         var errors: [String] = []
-        let warnings: [String] = []
+        var warnings: [String] = []
         var writtenFiles: [String] = []
 
         // Build variables
@@ -149,29 +169,38 @@ final class ConfigService: ObservableObject {
         variables["DEPLOY_DIR"] = deployDir
         variables["NGINX_CONF"] = nginxDir
 
-        // Render and write each template
-        var templates: [(name: String, templateName: String, dest: URL)] = [
-            ("constant.js", "constant.js", URL(fileURLWithPath: nginxConfDir).appendingPathComponent("constant.js")),
-            ("constant-mount.js", "constant-mount.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-mount.js")),
-            ("constant-pro.js", "constant-pro.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-pro.js")),
-            ("constant-transcode.js", "constant-transcode.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-transcode.js")),
-            ("http.conf", "http.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("http.conf")),
-            ("https.conf", "https.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("https.conf")),
+        // Render and write each template.
+        // typeSpecific: look under Templates/plex or Templates/emby first.
+        // common: docker-compose.yml lives at Templates/docker-compose.yml.
+        var templates: [(name: String, templateName: String, dest: URL, typeSpecific: Bool)] = [
+            ("constant.js", "constant.js", URL(fileURLWithPath: nginxConfDir).appendingPathComponent("constant.js"), true),
+            ("constant-mount.js", "constant-mount.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-mount.js"), true),
+            ("constant-pro.js", "constant-pro.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-pro.js"), true),
+            ("constant-transcode.js", "constant-transcode.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-transcode.js"), true),
+            ("http.conf", "http.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("http.conf"), false),
+            ("https.conf", "https.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("https.conf"), false),
+            ("docker-compose.yml", "docker-compose.yml", URL(fileURLWithPath: deployDir).appendingPathComponent("docker-compose.yml"), false),
         ]
 
         if config.mediaServerType != .plex {
-            templates.append(("constant-ext.js", "constant-ext.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-ext.js")))
+            templates.append(("constant-ext.js", "constant-ext.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-ext.js"), true))
         }
 
         let renderer = TemplateRenderer.shared
         let backupDir = backupDirURL.path
         let templateSubfolder = config.mediaServerType.templateSubfolder
 
-        for (name, templateName, destURL) in templates {
-            // Check in type-specific templates directory first, fallback to common Templates
+        for (name, templateName, destURL, typeSpecific) in templates {
             let bundle = ConfigService.templatesBundle
-            guard let templatePath = bundle.url(forResource: "\(templateSubfolder)/\(templateName)", withExtension: nil)
-                    ?? bundle.url(forResource: "Templates/\(templateName)", withExtension: nil),
+            let templatePath: URL?
+            if typeSpecific {
+                templatePath = bundle.url(forResource: "\(templateSubfolder)/\(templateName)", withExtension: nil)
+                    ?? bundle.url(forResource: "Templates/\(templateName)", withExtension: nil)
+            } else {
+                templatePath = bundle.url(forResource: "Templates/\(templateName)", withExtension: nil)
+                    ?? bundle.url(forResource: templateName, withExtension: nil)
+            }
+            guard let templatePath,
                   let templateContent = try? String(contentsOf: templatePath, encoding: .utf8) else {
                 errors.append("Template \(templateName) not found")
                 continue
@@ -242,6 +271,31 @@ final class ConfigService: ObservableObject {
                     errors.append("Failed to update \(activeConfName) SSL configuration: \(error.localizedDescription)")
                 }
             }
+        }
+
+        // Skeleton checks: parameter generate does not replace full upstream nginx tree.
+        let fm = FileManager.default
+        let nginxConfPath = nginxDir + "/nginx.conf"
+        if !fm.fileExists(atPath: nginxConfPath) {
+            warnings.append("缺少 \(nginxConfPath)。请先在「上游同步」复制 nginx 骨架，再生成参数。")
+        }
+        if !fm.fileExists(atPath: activeConfURL.path) {
+            warnings.append("缺少 \(activeConfName)。请先上游同步，或确认 nginx 配置目录正确。")
+        }
+        let helperFiles = [
+            "constant-common.js",
+            "constant-symlink.js",
+            "constant-strm.js",
+            "constant-nginx.js"
+        ]
+        for helper in helperFiles {
+            let path = nginxConfigDir + "/" + helper
+            if !fm.fileExists(atPath: path) {
+                warnings.append("缺少 \(helper)（constant.js 会 import）。请先上游同步。")
+            }
+        }
+        if !fm.fileExists(atPath: deployDir + "/docker-compose.yml") {
+            warnings.append("docker-compose.yml 未写入部署目录，容器启动将失败。")
         }
 
         let report = DeploymentReport(

@@ -274,29 +274,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func startContainer() {
+        if DockerService.shared.isBusy {
+            alert(message: "已有容器操作进行中，请稍候。")
+            return
+        }
         let deployDir = ConfigService.shared.ensureDeploymentDirectory()
         guard FileManager.default.fileExists(atPath: "\(deployDir)/docker-compose.yml") else {
             alert(message: "请先在主界面生成部署配置。")
             return
         }
         Task {
-            _ = await DockerService.shared.up(directory: deployDir)
+            let result = await DockerService.shared.up(directory: deployDir)
+            if result.exitCode != 0 {
+                await MainActor.run {
+                    alert(message: "启动失败:\n\(result.stderr.isEmpty ? result.stdout : result.stderr)")
+                }
+            }
             await refreshStatus()
         }
     }
 
     @objc private func stopContainer() {
+        if DockerService.shared.isBusy {
+            alert(message: "已有容器操作进行中，请稍候。")
+            return
+        }
         let deployDir = ConfigService.shared.ensureDeploymentDirectory()
         Task {
-            _ = await DockerService.shared.down(directory: deployDir)
+            let result = await DockerService.shared.down(directory: deployDir)
+            if result.exitCode != 0 {
+                await MainActor.run {
+                    alert(message: "停止失败:\n\(result.stderr.isEmpty ? result.stdout : result.stderr)")
+                }
+            }
             await refreshStatus()
         }
     }
 
     @objc private func restartContainer() {
+        if DockerService.shared.isBusy {
+            alert(message: "已有容器操作进行中，请稍候。")
+            return
+        }
         let deployDir = ConfigService.shared.ensureDeploymentDirectory()
         Task {
-            _ = await DockerService.shared.restart(directory: deployDir)
+            let result = await DockerService.shared.restart(directory: deployDir)
+            if result.exitCode != 0 {
+                await MainActor.run {
+                    alert(message: "重启失败:\n\(result.stderr.isEmpty ? result.stdout : result.stderr)")
+                }
+            }
             await refreshStatus()
         }
     }

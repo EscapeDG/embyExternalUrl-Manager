@@ -1,5 +1,15 @@
 # embyExternalUrl-Manager Release Notes
 
+## 1.0.3 (103)
+
+- **生成部署文件恢复写入 `docker-compose.yml`**：修复「生成配置成功但无法启动容器」的问题；模板变量包含容器名、部署目录与 nginx 配置路径。
+- **生成结果增加 nginx 骨架警告**：若缺少 `nginx.conf`、活动 conf 或 constant 依赖文件，提示先「上游同步」再生成参数。
+- **配置持久化硬化**：`save()` 返回成功/失败；损坏 `config.json` 会备份到 Backups 后再回退默认；OpenList / Mount / PathMapping 字段缺失时可弹性解码。
+- **仪表盘 Jellyfin 端口徽章修正**：非 Plex 时按当前类型显示正确 HTTP/HTTPS 代理端口。
+- **容器操作 busy 锁**：启动/停止/重启互斥；生成页与菜单栏在操作中禁用或提示，失败时弹出错误信息。
+- **恢复默认需确认**：连接页「恢复默认」增加 confirmationDialog，避免一键清空。
+- 附带 OpenSpec 变更记录：`openspec/changes/fix-generate-compose-and-ui-guards/`。
+
 ## 1.0.2 (102)
 
 - UI 架构升级：由原先传统的 TabView 标签页页面转换到了高颜值的双栏侧边栏 (`SidebarView`) 与仪表盘 (`DashboardView`) 架构，提升应用视觉质感并精简了导航流。

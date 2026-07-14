@@ -4,6 +4,8 @@ import SwiftUI
 struct ConnectionView: View {
     @EnvironmentObject var configService: ConfigService
     @State private var showSaveAlert = false
+    @State private var saveSucceeded = false
+    @State private var showResetConfirm = false
     @State private var scanMessage: String?
     @State private var scanSuccess = false
 
@@ -116,13 +118,13 @@ struct ConnectionView: View {
                 // MARK: Save
                 HStack {
                     Button("保存配置") {
-                        configService.save()
+                        saveSucceeded = configService.save()
                         showSaveAlert = true
                     }
                     .buttonStyle(.borderedProminent)
 
                     Button("恢复默认") {
-                        configService.resetToDefaults()
+                        showResetConfirm = true
                     }
                     .buttonStyle(.bordered)
                 }
@@ -131,8 +133,20 @@ struct ConnectionView: View {
             }
             .padding(24)
         }
-        .alert("已保存", isPresented: $showSaveAlert) {
+        .alert(saveSucceeded ? "已保存" : "保存失败", isPresented: $showSaveAlert) {
             Button("确定", role: .cancel) {}
+        } message: {
+            Text(saveSucceeded
+                 ? "配置已写入磁盘。"
+                 : (configService.lastPersistenceError ?? "无法写入配置文件。"))
+        }
+        .confirmationDialog("恢复默认配置？", isPresented: $showResetConfirm, titleVisibility: .visible) {
+            Button("恢复默认", role: .destructive) {
+                _ = configService.resetToDefaults()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将清空当前所有媒体服务器、OpenList、路径与证书相关设置，并立即写入磁盘。")
         }
         .navigationTitle("媒体服务器")
     }

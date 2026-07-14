@@ -10,6 +10,7 @@ final class DockerService: ObservableObject {
     @Published var containerRunning: Bool = false
     @Published var containerStatus: String = ""
     @Published var lastCommandResult: CommandResult?
+    @Published var isBusy: Bool = false
 
     private let processQueue = DispatchQueue(label: "docker.service")
 
@@ -48,24 +49,48 @@ final class DockerService: ObservableObject {
     }
 
     func up(directory: String) async -> CommandResult {
+        guard await tryBeginBusy() else {
+            return CommandResult(command: "docker compose up", exitCode: -1, stdout: "", stderr: "已有容器操作进行中")
+        }
         let result = await runCommand("/usr/bin/env", args: ["docker", "compose", "-f", "\(directory)/docker-compose.yml", "up", "-d"], timeout: 90)
         await MainActor.run { self.lastCommandResult = result }
         _ = await ps()
+        await clearBusy()
         return result
     }
 
     func down(directory: String) async -> CommandResult {
+        guard await tryBeginBusy() else {
+            return CommandResult(command: "docker compose down", exitCode: -1, stdout: "", stderr: "已有容器操作进行中")
+        }
         let result = await runCommand("/usr/bin/env", args: ["docker", "compose", "-f", "\(directory)/docker-compose.yml", "down"], timeout: 30)
         await MainActor.run { self.lastCommandResult = result }
         _ = await ps()
+        await clearBusy()
         return result
     }
 
     func restart(directory: String) async -> CommandResult {
+        guard await tryBeginBusy() else {
+            return CommandResult(command: "docker compose restart", exitCode: -1, stdout: "", stderr: "已有容器操作进行中")
+        }
         let result = await runCommand("/usr/bin/env", args: ["docker", "compose", "-f", "\(directory)/docker-compose.yml", "restart"], timeout: 30)
         await MainActor.run { self.lastCommandResult = result }
         _ = await ps()
+        await clearBusy()
         return result
+    }
+
+    private func tryBeginBusy() async -> Bool {
+        await MainActor.run {
+            if isBusy { return false }
+            isBusy = true
+            return true
+        }
+    }
+
+    private func clearBusy() async {
+        await MainActor.run { isBusy = false }
     }
 
     func logs(tail: Int = 100, mediaServerType: MediaServerType = ConfigService.shared.config.mediaServerType) async -> String {
@@ -111,7 +136,6 @@ final class DockerService: ObservableObject {
             if let matched = out.split(separator: "\n").map(String.init).first(where: { $0 == name }) {
                 return matched
             }
-            if !out.isEmpty { return out }
         }
         return ""
     }
