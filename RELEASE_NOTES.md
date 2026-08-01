@@ -1,6 +1,6 @@
 # embyExternalUrl-Manager Release Notes
 
-## 1.0.4 (104)
+## 1.0.5 (105)
 
 - **配置损坏保护**：`config.json` 解析失败且备份失败时，不再静默丢弃，而是保留原文件与当前内存配置并提示用户手动处理。
 - **Docker 命令死锁修复**：外部进程执行改为并发读取 stdout/stderr，`docker compose`、镜像拉取等大输出命令不再因管道缓冲写满而阻塞至超时。
@@ -12,6 +12,10 @@
 - **备份文件名唯一化**：生成备份加入毫秒时间戳与目录 hash，避免同秒或跨部署同名碰撞导致写入失败。
 - **构建一致性**：Rust core 构建启用 `--locked`，lockfile 过期时构建直接失败；`Cargo.lock` 与发布版本对齐。
 - 附带 OpenSpec 变更记录：`openspec/changes/fix-v104-hardening/`。
+
+## 1.0.4 (104)
+
+- 中间版本标签（与 1.0.5 同源 hardening 提交窗口）；请以 **1.0.5** 为当前稳定发布。
 
 ## 1.0.3 (103)
 
