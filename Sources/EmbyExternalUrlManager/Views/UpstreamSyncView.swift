@@ -14,6 +14,7 @@ struct UpstreamSyncView: View {
     @State private var localPullResult: CommandResult?
     @State private var syncReport: UpstreamSyncService.SyncReport?
     @State private var reloadResult: CommandResult?
+    @State private var persistenceWarning: String?
 
     var body: some View {
         ScrollView {
@@ -123,6 +124,12 @@ struct UpstreamSyncView: View {
                     CommandOutputView(title: "在线上游更新", result: onlineResult)
                 }
 
+                if let persistenceWarning {
+                    Label(persistenceWarning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+
                 if let localPullResult {
                     CommandOutputView(title: "本地 Git 拉取", result: localPullResult)
                 }
@@ -179,7 +186,7 @@ struct UpstreamSyncView: View {
 
         await MainActor.run {
             configService.config.upstreamRepoDirectory = cache
-            configService.save()
+            persistenceWarning = configService.save() ? nil : (configService.lastPersistenceError ?? "保存上游缓存目录失败。")
         }
 
         let online = await UpstreamSyncService.shared.syncOnlineRepository(
@@ -224,7 +231,7 @@ struct UpstreamSyncView: View {
         let target = effectiveTargetDirectory
         await MainActor.run {
             configService.config.upstreamRepoDirectory = source
-            configService.save()
+            persistenceWarning = configService.save() ? nil : (configService.lastPersistenceError ?? "保存上游目录失败。")
         }
 
         var pull: CommandResult?

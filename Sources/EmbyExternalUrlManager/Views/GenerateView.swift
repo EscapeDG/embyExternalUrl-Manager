@@ -9,6 +9,7 @@ struct GenerateView: View {
     @State private var composeResult: CommandResult?
     @State private var nginxTestResult: CommandResult?
     @State private var containerLogs: String = ""
+    @State private var lifecycleResult: CommandResult?
 
     var body: some View {
         ScrollView {
@@ -97,19 +98,19 @@ struct GenerateView: View {
                             .disabled(!dockerService.isAvailable)
 
                             Button("启动") {
-                                Task { await dockerService.up(directory: configService.ensureDeploymentDirectory()) }
+                                Task { lifecycleResult = await dockerService.up(directory: configService.ensureDeploymentDirectory()) }
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(!dockerService.isAvailable || dockerService.containerRunning || dockerService.isBusy)
 
                             Button("重启") {
-                                Task { await dockerService.restart(directory: configService.ensureDeploymentDirectory()) }
+                                Task { lifecycleResult = await dockerService.restart(directory: configService.ensureDeploymentDirectory()) }
                             }
                             .buttonStyle(.bordered)
                             .disabled(!dockerService.isAvailable || !dockerService.containerRunning || dockerService.isBusy)
 
                             Button("停止") {
-                                Task { await dockerService.down(directory: configService.ensureDeploymentDirectory()) }
+                                Task { lifecycleResult = await dockerService.down(directory: configService.ensureDeploymentDirectory()) }
                             }
                             .buttonStyle(.bordered)
                             .disabled(!dockerService.isAvailable || !dockerService.containerRunning || dockerService.isBusy)
@@ -120,6 +121,10 @@ struct GenerateView: View {
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
+                        }
+
+                        if let lifecycleResult, lifecycleResult.exitCode != 0 {
+                            CommandOutputView(title: "容器操作失败", result: lifecycleResult)
                         }
 
                         if let result = composeResult {

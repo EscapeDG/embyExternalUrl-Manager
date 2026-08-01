@@ -10,8 +10,8 @@ cd "$PROJECT_DIR"
 
 APP_NAME="embyExternalUrl-Manager"
 BUNDLE_ID="com.embyexternalurl.manager"
-VERSION="1.0.3"
-BUILD_NUMBER="103"
+VERSION="1.0.4"
+BUILD_NUMBER="104"
 DIST_DIR="${PROJECT_DIR}/dist"
 APP_DIR="${DIST_DIR}/${APP_NAME}.app"
 MACOS_DIR="${APP_DIR}/Contents/MacOS"
@@ -35,7 +35,7 @@ if [ -f "$CORE_MANIFEST" ]; then
         exit 1
     fi
     echo "🦀 Building Rust core for release..."
-    cargo build --release --manifest-path "$CORE_MANIFEST"
+    cargo build --release --locked --manifest-path "$CORE_MANIFEST"
 else
     echo "❌ Error: Rust core manifest not found at $CORE_MANIFEST"
     exit 1

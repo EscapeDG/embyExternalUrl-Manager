@@ -142,7 +142,8 @@ struct ConnectionView: View {
         }
         .confirmationDialog("恢复默认配置？", isPresented: $showResetConfirm, titleVisibility: .visible) {
             Button("恢复默认", role: .destructive) {
-                _ = configService.resetToDefaults()
+                saveSucceeded = configService.resetToDefaults()
+                showSaveAlert = true
             }
             Button("取消", role: .cancel) {}
         } message: {
@@ -360,9 +361,13 @@ struct ConnectionView: View {
             scanMessage = "在 \(nginxDir) 下未识别到有效配置"
             scanSuccess = false
         } else {
-            scanMessage = "已读取 \(filled.count) 项配置：\(filled.joined(separator: "、"))"
-            scanSuccess = true
-            configService.save()
+            if configService.save() {
+                scanMessage = "已读取 \(filled.count) 项配置：\(filled.joined(separator: "、"))"
+                scanSuccess = true
+            } else {
+                scanMessage = "已识别配置但保存失败：\(configService.lastPersistenceError ?? "无法写入配置文件。")"
+                scanSuccess = false
+            }
         }
     }
 }

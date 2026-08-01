@@ -40,9 +40,13 @@ final class ConfigService: ObservableObject {
         } catch {
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
             let backupURL = backupDirURL.appendingPathComponent("config.corrupt.\(stamp).json")
-            try? fm.copyItem(at: configFileURL, to: backupURL)
-            lastPersistenceError = "配置文件无法解析，已备份并恢复默认。\(backupURL.lastPathComponent)"
-            config = AppConfig()
+            do {
+                try fm.copyItem(at: configFileURL, to: backupURL)
+                config = AppConfig()
+                lastPersistenceError = "配置文件无法解析，已备份并恢复默认。\(backupURL.lastPathComponent)"
+            } catch {
+                lastPersistenceError = "配置文件无法解析且备份失败，已保留原文件与当前配置：\(error.localizedDescription)"
+            }
         }
     }
 
@@ -166,12 +170,13 @@ final class ConfigService: ObservableObject {
         let enabledMappings = config.pathMappings.filter(\.enabled)
         variables["MEDIA_PATH_MAPPING"] = mediaPathMappingJS(enabledMappings)
         // Docker compose
-        variables["DEPLOY_DIR"] = deployDir
-        variables["NGINX_CONF"] = nginxDir
+        variables["DEPLOY_DIR"] = yamlEscape(deployDir)
+        variables["NGINX_CONF"] = yamlEscape(nginxDir)
 
         // Render and write each template.
         // typeSpecific: look under Templates/plex or Templates/emby first.
         // common: docker-compose.yml lives at Templates/docker-compose.yml.
+        let composeURL = URL(fileURLWithPath: deployDir).appendingPathComponent("docker-compose.yml")
         var templates: [(name: String, templateName: String, dest: URL, typeSpecific: Bool)] = [
             ("constant.js", "constant.js", URL(fileURLWithPath: nginxConfDir).appendingPathComponent("constant.js"), true),
             ("constant-mount.js", "constant-mount.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-mount.js"), true),
@@ -179,8 +184,13 @@ final class ConfigService: ObservableObject {
             ("constant-transcode.js", "constant-transcode.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-transcode.js"), true),
             ("http.conf", "http.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("http.conf"), false),
             ("https.conf", "https.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("https.conf"), false),
-            ("docker-compose.yml", "docker-compose.yml", URL(fileURLWithPath: deployDir).appendingPathComponent("docker-compose.yml"), false),
         ]
+
+        if FileManager.default.fileExists(atPath: composeURL.path) {
+            warnings.append("docker-compose.yml 已存在，本次保留未覆盖。如需重新生成，请先删除该文件。")
+        } else {
+            templates.append(("docker-compose.yml", "docker-compose.yml", composeURL, false))
+        }
 
         if config.mediaServerType != .plex {
             templates.append(("constant-ext.js", "constant-ext.js", URL(fileURLWithPath: nginxConfigDir).appendingPathComponent("constant-ext.js"), true))
@@ -282,12 +292,14 @@ final class ConfigService: ObservableObject {
         if !fm.fileExists(atPath: activeConfURL.path) {
             warnings.append("缺少 \(activeConfName)。请先上游同步，或确认 nginx 配置目录正确。")
         }
-        let helperFiles = [
+        var helperFiles = [
             "constant-common.js",
             "constant-symlink.js",
-            "constant-strm.js",
-            "constant-nginx.js"
+            "constant-strm.js"
         ]
+        if config.mediaServerType != .plex {
+            helperFiles.append("constant-nginx.js")
+        }
         for helper in helperFiles {
             let path = nginxConfigDir + "/" + helper
             if !fm.fileExists(atPath: path) {
@@ -325,6 +337,11 @@ final class ConfigService: ObservableObject {
         let data = try? JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted])
         let str = data.flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         return str.replacingOccurrences(of: "\\/", with: "/")
+    }
+
+    private func yamlEscape(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     private func mediaPathMappingJS(_ mappings: [PathMapping]) -> String {

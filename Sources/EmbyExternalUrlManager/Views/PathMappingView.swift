@@ -3,6 +3,7 @@ import SwiftUI
 struct PathMappingView: View {
     @EnvironmentObject var configService: ConfigService
     @State private var showSaveAlert = false
+    @State private var saveSucceeded = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -136,7 +137,7 @@ struct PathMappingView: View {
 
             HStack {
                 Button("保存配置") {
-                    configService.save()
+                    saveSucceeded = configService.save()
                     showSaveAlert = true
                 }
                 .buttonStyle(.borderedProminent)
@@ -146,8 +147,12 @@ struct PathMappingView: View {
             .background(Color(NSColor.windowBackgroundColor))
         }
         .navigationTitle("路径映射")
-        .alert("已保存", isPresented: $showSaveAlert) {
+        .alert(saveSucceeded ? "已保存" : "保存失败", isPresented: $showSaveAlert) {
             Button("确定", role: .cancel) {}
+        } message: {
+            if !saveSucceeded {
+                Text(configService.lastPersistenceError ?? "无法写入配置文件。")
+            }
         }
     }
 

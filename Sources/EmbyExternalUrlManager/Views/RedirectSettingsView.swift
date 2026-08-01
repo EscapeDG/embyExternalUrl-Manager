@@ -3,6 +3,7 @@ import SwiftUI
 struct RedirectSettingsView: View {
     @EnvironmentObject var configService: ConfigService
     @State private var showSaveAlert = false
+    @State private var saveSucceeded = true
 
     private var serverName: String {
         switch configService.config.mediaServerType {
@@ -183,7 +184,7 @@ struct RedirectSettingsView: View {
                 // MARK: Save
                 HStack {
                     Button("保存配置") {
-                        configService.save()
+                        saveSucceeded = configService.save()
                         showSaveAlert = true
                     }
                     .buttonStyle(.borderedProminent)
@@ -194,8 +195,12 @@ struct RedirectSettingsView: View {
             .padding(24)
         }
         .navigationTitle("302 规则")
-        .alert("已保存", isPresented: $showSaveAlert) {
+        .alert(saveSucceeded ? "已保存" : "保存失败", isPresented: $showSaveAlert) {
             Button("确定", role: .cancel) {}
+        } message: {
+            if !saveSucceeded {
+                Text(configService.lastPersistenceError ?? "无法写入配置文件。")
+            }
         }
     }
 

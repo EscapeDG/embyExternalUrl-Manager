@@ -37,6 +37,7 @@ struct CertificateView: View {
     @State private var reloadAfterRenew = true
     @State private var isAcmeWorking = false
     @State private var acmeCommandResult: CommandResult?
+    @State private var persistenceWarning: String?
 
     var body: some View {
         ScrollView {
@@ -57,6 +58,12 @@ struct CertificateView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+
+                if let persistenceWarning {
+                    Label(persistenceWarning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
 
                 // Manual upload
                 if certMode == .manual {
@@ -342,7 +349,10 @@ struct CertificateView: View {
     private func updateCertificate() async {
         isUpdating = true; reloadResult = nil
         let targetDirectory = effectiveCertDirectory
-        await MainActor.run { configService.config.certificateDirectory = targetDirectory; configService.save() }
+        await MainActor.run {
+            configService.config.certificateDirectory = targetDirectory
+            persistenceWarning = configService.save() ? nil : (configService.lastPersistenceError ?? "保存证书目录失败。")
+        }
         let updateReport = await CertificateService.shared.updateCertificate(
             certificatePath: certificatePath, privateKeyPath: privateKeyPath,
             certDirectory: targetDirectory, pfxPassword: pfxPassword, privateKeyPassword: privateKeyPassword)
@@ -407,7 +417,7 @@ struct CertificateView: View {
         configService.config.certificateCustomIssueArguments = acmeCustomArguments
         configService.config.certificatePreflightShell = acmePreflightShell
         configService.config.certificateReloadAfterRenew = reloadAfterRenew
-        configService.save()
+        persistenceWarning = configService.save() ? nil : (configService.lastPersistenceError ?? "保存 ACME 配置失败。")
     }
 
     private func reportContent(_ report: CertificateService.CertificateUpdateReport) -> some View {

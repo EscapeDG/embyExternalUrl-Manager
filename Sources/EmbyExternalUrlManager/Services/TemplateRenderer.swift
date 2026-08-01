@@ -38,10 +38,13 @@ final class TemplateRenderer {
         // Backup existing file
         var backupPath: String?
         if fm.fileExists(atPath: url.path), let backupDir = backupDir {
-            let timestamp = ISO8601DateFormatter().string(from: Date())
-                .replacingOccurrences(of: ":", with: "-")
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            let timestamp = formatter.string(from: Date())
+            let sourceHash = String(url.deletingLastPathComponent().path.hashValue.magnitude, radix: 16)
             let backupURL = URL(fileURLWithPath: backupDir)
-                .appendingPathComponent("\(url.lastPathComponent).\(timestamp).bak")
+                .appendingPathComponent("\(url.lastPathComponent).\(timestamp).\(sourceHash).bak")
             try fm.copyItem(at: url, to: backupURL)
             backupPath = backupURL.path
         }

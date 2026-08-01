@@ -46,7 +46,7 @@ cargo build --release --manifest-path RustCore/Cargo.toml
 
 ## 测试现状与已知限制
 
-- **测试现状**：目前主要在 macOS 宿主机 **Plex** 配合 Docker Nginx/njs 及 OpenList 后端下完成了全链路 302 拦截播放的 smoke test。
+- **测试现状**：目前主要在 macOS 宿主机 **Plex** 场景下进行了开发与构建验证。**真实 Docker + OpenList + Plex 的全链路 302 拦截播放 smoke test 仍在待验证清单中**，欢迎有环境的用户测试并提 Issue 反馈。
 - **Emby/Jellyfin 状态**：虽然界面和核心代码已同步继承了上游的 302 配置文件生成与管理能力，但由于个人缺乏真实的 Emby/Jellyfin 测试环境，**尚未经过完整的生产联调验证**，非常欢迎有环境的用户测试并提 Issue 反馈。
 - **凭据安全**：当前版本尚未把 OpenList Token 迁移到 macOS Keychain，目前以明文形式保存在用户的 Application Support 配置目录中。请不要在公开 issue 中暴露该敏感信息。
 - **系统拦截**：未使用 Developer ID 签名和 Apple 公证的 DMG 可能会被 Gatekeeper 拦截。

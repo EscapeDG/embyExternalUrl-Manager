@@ -33,7 +33,7 @@ final class DockerService: ObservableObject {
             let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
             return (parts.first ?? "", parts.count > 1 ? parts[1] : "")
         }
-        if let currentContainer = containers.first(where: { candidates.contains($0.name) }) ?? containers.first {
+        if let currentContainer = containers.first(where: { candidates.contains($0.name) }) {
             await MainActor.run {
                 containerRunning = currentContainer.status.contains("Up")
                 containerStatus = "\(currentContainer.name) — \(currentContainer.status)"
@@ -52,10 +52,10 @@ final class DockerService: ObservableObject {
         guard await tryBeginBusy() else {
             return CommandResult(command: "docker compose up", exitCode: -1, stdout: "", stderr: "已有容器操作进行中")
         }
+        defer { Task { await clearBusy() } }
         let result = await runCommand("/usr/bin/env", args: ["docker", "compose", "-f", "\(directory)/docker-compose.yml", "up", "-d"], timeout: 90)
         await MainActor.run { self.lastCommandResult = result }
         _ = await ps()
-        await clearBusy()
         return result
     }
 
@@ -63,10 +63,10 @@ final class DockerService: ObservableObject {
         guard await tryBeginBusy() else {
             return CommandResult(command: "docker compose down", exitCode: -1, stdout: "", stderr: "已有容器操作进行中")
         }
+        defer { Task { await clearBusy() } }
         let result = await runCommand("/usr/bin/env", args: ["docker", "compose", "-f", "\(directory)/docker-compose.yml", "down"], timeout: 30)
         await MainActor.run { self.lastCommandResult = result }
         _ = await ps()
-        await clearBusy()
         return result
     }
 
@@ -74,10 +74,10 @@ final class DockerService: ObservableObject {
         guard await tryBeginBusy() else {
             return CommandResult(command: "docker compose restart", exitCode: -1, stdout: "", stderr: "已有容器操作进行中")
         }
+        defer { Task { await clearBusy() } }
         let result = await runCommand("/usr/bin/env", args: ["docker", "compose", "-f", "\(directory)/docker-compose.yml", "restart"], timeout: 30)
         await MainActor.run { self.lastCommandResult = result }
         _ = await ps()
-        await clearBusy()
         return result
     }
 
@@ -141,10 +141,10 @@ final class DockerService: ObservableObject {
     }
 
     private func runCommandSync(_ command: String, args: [String], timeout: TimeInterval = 10) -> CommandResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: command)
-        process.arguments = args
+        Self.execute(command: command, args: args, timeout: timeout)
+    }
 
+    private static func dockerEnvironment() -> [String: String] {
         let existingPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let dockerPaths = [
@@ -154,33 +154,75 @@ final class DockerService: ObservableObject {
             "\(home)/.orbstack/bin",
             "\(home)/.docker/bin"
         ]
-        let extendedPath = (dockerPaths + [existingPath]).joined(separator: ":")
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = extendedPath
-        process.environment = env
+        env["PATH"] = (dockerPaths + [existingPath]).joined(separator: ":")
+        return env
+    }
+
+    /// 启动进程并并发排空 stdout/stderr，避免子进程因管道缓冲写满而阻塞。
+    /// 返回 (exitCode, stdout, stderr, timedOut)；启动失败时 exitCode 为 nil。
+    private static func execute(command: String, args: [String], timeout: TimeInterval) -> CommandResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: command)
+        process.arguments = args
+        process.environment = dockerEnvironment()
 
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
 
+        let outData = NSMutableData()
+        let errData = NSMutableData()
+        let dataLock = NSLock()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            dataLock.lock()
+            outData.append(chunk)
+            dataLock.unlock()
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            dataLock.lock()
+            errData.append(chunk)
+            dataLock.unlock()
+        }
+
+        let commandLine = ([command] + args).joined(separator: " ")
         do {
             try process.run()
-            let timedOut = Self.wait(for: process, timeout: timeout)
-            if timedOut {
-                Self.terminate(process)
-            }
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            return CommandResult(
-                command: ([command] + args).joined(separator: " "),
-                exitCode: timedOut ? -9 : process.terminationStatus,
-                stdout: String(data: outData, encoding: .utf8) ?? "",
-                stderr: timedOut ? "Command timed out after \(Int(timeout))s" : (String(data: errData, encoding: .utf8) ?? "")
-            )
         } catch {
-            return CommandResult(command: "", exitCode: -1, stdout: "", stderr: error.localizedDescription)
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            return CommandResult(command: commandLine, exitCode: -1, stdout: "", stderr: error.localizedDescription)
         }
+
+        let timedOut = Self.wait(for: process, timeout: timeout)
+        if timedOut {
+            Self.terminate(process)
+        }
+        process.waitUntilExit()
+
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+        // 进程退出后管道中可能仍有 handler 尚未派发的残余数据
+        let outRemainder = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let errRemainder = errPipe.fileHandleForReading.readDataToEndOfFile()
+        dataLock.lock()
+        outData.append(outRemainder)
+        errData.append(errRemainder)
+        let finalOut = outData as Data
+        let finalErr = errData as Data
+        dataLock.unlock()
+
+        return CommandResult(
+            command: commandLine,
+            exitCode: timedOut ? -9 : process.terminationStatus,
+            stdout: String(data: finalOut, encoding: .utf8) ?? "",
+            stderr: timedOut ? "Command timed out after \(Int(timeout))s" : (String(data: finalErr, encoding: .utf8) ?? "")
+        )
     }
 
     // MARK: - Process Runner
@@ -188,57 +230,7 @@ final class DockerService: ObservableObject {
     private func runCommand(_ command: String, args: [String], timeout: TimeInterval = 30) async -> CommandResult {
         return await withCheckedContinuation { continuation in
             processQueue.async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: command)
-                process.arguments = args
-
-                let outPipe = Pipe()
-                let errPipe = Pipe()
-                process.standardOutput = outPipe
-                process.standardError = errPipe
-
-                // macOS GUI app 的 PATH 只有 /usr/bin:/bin，手动补全 Docker 路径
-                let existingPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
-                let home = FileManager.default.homeDirectoryForCurrentUser.path
-                let dockerPaths = [
-                    "/usr/local/bin",
-                    "/opt/homebrew/bin",
-                    "/opt/homebrew/sbin",
-                    "\(home)/.orbstack/bin",
-                    "\(home)/.docker/bin"
-                ]
-                let extendedPath = (dockerPaths + [existingPath]).joined(separator: ":")
-                var env = ProcessInfo.processInfo.environment
-                env["PATH"] = extendedPath
-                process.environment = env
-
-                let start = Date()
-                do {
-                    try process.run()
-                    let timedOut = Self.wait(for: process, timeout: timeout)
-                    if timedOut {
-                        Self.terminate(process)
-                    }
-
-                    let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                    _ = Int(Date().timeIntervalSince(start) * 1000)
-
-                    let result = CommandResult(
-                        command: ([command] + args).joined(separator: " "),
-                        exitCode: timedOut ? -9 : process.terminationStatus,
-                        stdout: String(data: outData, encoding: .utf8) ?? "",
-                        stderr: timedOut ? "Command timed out after \(Int(timeout))s" : (String(data: errData, encoding: .utf8) ?? ""),
-                    )
-                    continuation.resume(returning: result)
-                } catch {
-                    continuation.resume(returning: CommandResult(
-                        command: ([command] + args).joined(separator: " "),
-                        exitCode: -1,
-                        stdout: "",
-                        stderr: error.localizedDescription
-                    ))
-                }
+                continuation.resume(returning: Self.execute(command: command, args: args, timeout: timeout))
             }
         }
     }
