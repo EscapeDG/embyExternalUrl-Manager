@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var configService: ConfigService
-    @StateObject private var dockerService = DockerService.shared
+    @StateObject private var systemStatus = SystemStatusStore.shared
     @State private var selectedItem: SidebarItem? = .dashboard
 
     var body: some View {
@@ -11,37 +11,36 @@ struct ContentView: View {
         } detail: {
             detailView
                 .toolbar {
-                    // Refresh
                     ToolbarItem(placement: .primaryAction) {
                         Button {
                             Task {
-                                await dockerService.detect()
-                                _ = await dockerService.ps()
+                                await systemStatus.refreshAll(configService: configService, force: true)
                             }
                         } label: {
                             Label("刷新", systemImage: "arrow.clockwise")
                                 .labelStyle(.iconOnly)
                         }
-                        .help("刷新状态")
+                        .help("刷新 Docker / 容器 / 证书状态")
                     }
                 }
         }
         .frame(minWidth: 900, minHeight: 600)
+        .environment(\.navigate, $selectedItem)
+        .environmentObject(systemStatus)
         .onAppear {
             Task {
-                await dockerService.detect()
-                _ = await dockerService.ps(mediaServerType: configService.config.mediaServerType)
+                await systemStatus.refreshAll(configService: configService, force: true)
             }
         }
         .onChange(of: configService.config.mediaServerType) { _, _ in
             Task {
-                await dockerService.detect()
-                _ = await dockerService.ps(mediaServerType: configService.config.mediaServerType)
+                await systemStatus.refreshDocker(
+                    mediaServerType: configService.config.mediaServerType,
+                    force: true
+                )
             }
         }
     }
-
-    // MARK: - Detail View Router
 
     @ViewBuilder
     private var detailView: some View {
@@ -66,7 +65,4 @@ struct ContentView: View {
             DashboardView()
         }
     }
-
 }
-
-

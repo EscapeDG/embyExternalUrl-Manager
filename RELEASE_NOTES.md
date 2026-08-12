@@ -1,5 +1,24 @@
 # embyExternalUrl-Manager Release Notes
 
+## 1.1.0 (110)
+
+### 架构治理（从补丁到契约）
+
+- **配置单一写路径**：`ConfigService` 跟踪 `isDirty` / `lastSavedAt`；编辑只改内存，`save()` 是唯一落盘入口。
+- **生成前自动保存**：`generateDeployment()` 若有未保存更改先 `saveIfNeeded()`，失败则中止生成并回报错误，消除「内存有、磁盘无」断链。
+- **SystemStatusStore**：Docker / 容器 / 证书摘要单源刷新（带 debounce），仪表盘、生成页、菜单栏共用，去掉多处重复 `detect+ps`。
+- **DeploymentPipeline**：主链路检查单（配置 → 端点 → 上游骨架 → 参数 → compose → Docker → 容器）；**仪表盘简版 + 生成页完整版**，缺步可一键跳转。
+- **PageScaffold + ConfigSaveBar**：统一页面壳与底栏保存反馈（脏指示 / 错误 inline），去掉各配置页复制的 Alert 状态机。
+- **MediaServerEditor**：Plex / Emby / Jellyfin 表单合并，避免三段漂移。
+- **证书卡真数据**：仪表盘证书卡读取 `CertificateService` 检验摘要，不再固定「待检查」。
+- **布局**：窗口最小尺寸统一 900×600；路径映射窄窗 `ViewThatFits` 纵向回退；生成页日志改 `DisclosureGroup`，去掉嵌套 ScrollView。
+- **窗口唤起**：菜单「显示主窗口」优先 `openWindow`，去掉 className 启发式扫描。
+
+### 限制
+
+- 仍为 ad-hoc 签名，未公证。
+- 真实 302 / OpenList smoke 需在部署环境手测；Pipeline 做到配置与容器/nginx 前置检查。
+
 ## 1.0.5 (105)
 
 - **配置损坏保护**：`config.json` 解析失败且备份失败时，不再静默丢弃，而是保留原文件与当前内存配置并提示用户手动处理。

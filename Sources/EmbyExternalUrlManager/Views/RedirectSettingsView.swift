@@ -2,8 +2,6 @@ import SwiftUI
 
 struct RedirectSettingsView: View {
     @EnvironmentObject var configService: ConfigService
-    @State private var showSaveAlert = false
-    @State private var saveSucceeded = true
 
     private var serverName: String {
         switch configService.config.mediaServerType {
@@ -14,7 +12,7 @@ struct RedirectSettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
+        PageScaffold(title: "302 规则") {
             VStack(alignment: .leading, spacing: 20) {
                 // MARK: 302 Master Switch + Sub-features
                 GroupBox {
@@ -181,26 +179,9 @@ struct RedirectSettingsView: View {
                     .groupBoxStyle(FormGroupBoxStyle())
                 }
 
-                // MARK: Save
-                HStack {
-                    Button("保存配置") {
-                        saveSucceeded = configService.save()
-                        showSaveAlert = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-
-                Spacer()
             }
-            .padding(24)
-        }
-        .navigationTitle("302 规则")
-        .alert(saveSucceeded ? "已保存" : "保存失败", isPresented: $showSaveAlert) {
-            Button("确定", role: .cancel) {}
-        } message: {
-            if !saveSucceeded {
-                Text(configService.lastPersistenceError ?? "无法写入配置文件。")
-            }
+        } footer: {
+            ConfigSaveBar()
         }
     }
 

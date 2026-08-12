@@ -18,7 +18,7 @@ struct EmbyExternalUrlManagerApp: App {
         WindowGroup(id: "main") {
             ContentView()
                 .environmentObject(configService)
-                .frame(minWidth: 800, minHeight: 600)
+                .frame(minWidth: 900, minHeight: 600)
                 .background(WindowOpener())
                 .onAppear {
                     NSApplication.shared.setActivationPolicy(.regular)
@@ -26,6 +26,7 @@ struct EmbyExternalUrlManagerApp: App {
                 }
         }
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 1100, height: 720)
     }
 }
 
@@ -181,17 +182,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func refreshStatus() async {
         let mediaServerType = ConfigService.shared.config.mediaServerType
-        await DockerService.shared.detect()
-        _ = await DockerService.shared.ps(mediaServerType: mediaServerType)
-
-        let available = DockerService.shared.isAvailable
-        let running = DockerService.shared.containerRunning
-        let status = DockerService.shared.containerStatus
+        await SystemStatusStore.shared.refreshDocker(mediaServerType: mediaServerType, force: true)
 
         await MainActor.run {
-            self.dockerAvailable = available
-            self.containerRunning = running
-            self.containerStatus = status
+            self.dockerAvailable = SystemStatusStore.shared.dockerAvailable
+            self.containerRunning = SystemStatusStore.shared.containerRunning
+            self.containerStatus = SystemStatusStore.shared.containerStatus
             self.updateMenuState()
         }
     }
@@ -250,25 +246,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Actions
 
     @objc private func showMainWindow() {
-        // Defer to the next runloop cycle so the status-bar menu
-        // has fully closed before we try to bring the window front.
+        // Defer until status-bar menu tracking ends, then prefer SwiftUI openWindow.
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
-            let targetWindows = NSApp.windows.filter { window in
-                window.canBecomeKey &&
-                window.className != "NSStatusBarWindow" &&
-                window.className != "NSMenuWindow" &&
-                window.styleMask.contains(.titled)
+            if let open = Self.openWindowAction {
+                open()
             }
-            if let window = targetWindows.first {
+            // Fallback: front any titled keyable window (no className heuristics).
+            if let window = NSApp.windows.first(where: { $0.canBecomeKey && $0.styleMask.contains(.titled) }) {
                 if window.isMiniaturized {
                     window.deminiaturize(nil)
                 }
                 window.makeKeyAndOrderFront(nil)
-            } else {
-                if let open = Self.openWindowAction {
-                    open()
-                }
             }
         }
     }

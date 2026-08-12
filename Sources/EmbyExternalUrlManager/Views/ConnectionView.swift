@@ -1,20 +1,22 @@
 import SwiftUI
+import AppKit
 
 /// Media server connection configuration (Plex / Emby / Jellyfin) + OpenList + paths.
 struct ConnectionView: View {
     @EnvironmentObject var configService: ConfigService
-    @State private var showSaveAlert = false
-    @State private var saveSucceeded = false
     @State private var showResetConfirm = false
     @State private var scanMessage: String?
     @State private var scanSuccess = false
 
-    private var config: AppConfig { configService.config }
-
     var body: some View {
-        ScrollView {
+        PageScaffold(title: "媒体服务器") {
             VStack(alignment: .leading, spacing: 24) {
-                // MARK: Media Server
+                if let err = configService.lastPersistenceError, !configService.isDirty {
+                    Label(err, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+
                 GroupBox {
                     VStack(alignment: .leading, spacing: 16) {
                         Picker("媒体服务器类型", selection: $configService.config.mediaServerType) {
@@ -24,23 +26,14 @@ struct ConnectionView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        switch configService.config.mediaServerType {
-                        case .plex:
-                            plexSection
-                        case .emby:
-                            embySection
-                        case .jellyfin:
-                            jellyfinSection
-                        }
+                        MediaServerEditor()
                     }
                 } label: {
                     Label("媒体服务器", systemImage: "cable.connector")
                         .font(.headline)
                 }
                 .groupBoxStyle(FormGroupBoxStyle())
-                .id(configService.config.mediaServerType) // Force rebuild on type switch
 
-                // MARK: OpenList
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         FormField(label: "服务器地址") {
@@ -64,7 +57,6 @@ struct ConnectionView: View {
                 }
                 .groupBoxStyle(FormGroupBoxStyle())
 
-                // MARK: Paths
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         FormField(label: "部署目录") {
@@ -96,7 +88,6 @@ struct ConnectionView: View {
                             }
                         }
 
-                        // Scan result feedback
                         if let msg = scanMessage {
                             HStack(spacing: 6) {
                                 Image(systemName: scanSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
@@ -114,148 +105,19 @@ struct ConnectionView: View {
                         .font(.headline)
                 }
                 .groupBoxStyle(FormGroupBoxStyle())
-
-                // MARK: Save
-                HStack {
-                    Button("保存配置") {
-                        saveSucceeded = configService.save()
-                        showSaveAlert = true
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button("恢复默认") {
-                        showResetConfirm = true
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Spacer()
             }
-            .padding(24)
-        }
-        .alert(saveSucceeded ? "已保存" : "保存失败", isPresented: $showSaveAlert) {
-            Button("确定", role: .cancel) {}
-        } message: {
-            Text(saveSucceeded
-                 ? "配置已写入磁盘。"
-                 : (configService.lastPersistenceError ?? "无法写入配置文件。"))
+        } footer: {
+            ConfigSaveBar(showsReset: true) {
+                showResetConfirm = true
+            }
         }
         .confirmationDialog("恢复默认配置？", isPresented: $showResetConfirm, titleVisibility: .visible) {
             Button("恢复默认", role: .destructive) {
-                saveSucceeded = configService.resetToDefaults()
-                showSaveAlert = true
+                _ = configService.resetToDefaults()
             }
             Button("取消", role: .cancel) {}
         } message: {
             Text("将清空当前所有媒体服务器、OpenList、路径与证书相关设置，并立即写入磁盘。")
-        }
-        .navigationTitle("媒体服务器")
-    }
-
-    // MARK: - Plex Section
-
-    private var plexSection: some View {
-        VStack(spacing: 12) {
-            FormField(label: "服务器地址") {
-                VStack(alignment: .leading) {
-                    TextField("http://127.0.0.1:32400", text: $configService.config.plex.serverURL)
-                    Text("上游 plex2Alist 只需要 Plex 源服务地址；播放请求中的 X-Plex-Token 会由 Plex 客户端带入并透传。")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 24) {
-                    FormField(label: "HTTP 反代端口") {
-                        TextField("8098", value: $configService.config.plex.proxyPort, format: .number)
-                            .frame(width: 120)
-                    }
-                    FormField(label: "HTTPS 反代端口") {
-                        TextField("8095", value: $configService.config.plex.proxyHttpsPort, format: .number)
-                            .frame(width: 120)
-                    }
-                }
-                Text("配置 nginx 容器的监听端口。HTTP 用于常规反向代理访问，HTTPS 用于证书加载后的 SSL 安全连接。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 2)
-            }
-        }
-    }
-
-    // MARK: - Emby Section
-
-    private var embySection: some View {
-        VStack(spacing: 12) {
-            FormField(label: "服务器地址") {
-                VStack(alignment: .leading) {
-                    TextField("http://127.0.0.1:8096", text: $configService.config.emby.serverURL)
-                    Text("输入 Emby 源服务地址。")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-
-            FormField(label: "API Key / Token") {
-                SecureField("输入 Emby API Key", text: $configService.config.emby.apiKey)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 24) {
-                    FormField(label: "HTTP 反代端口") {
-                        TextField("8091", value: $configService.config.emby.proxyPort, format: .number)
-                            .frame(width: 120)
-                    }
-                    FormField(label: "HTTPS 反代端口") {
-                        TextField("8095", value: $configService.config.emby.proxyHttpsPort, format: .number)
-                            .frame(width: 120)
-                    }
-                }
-                Text("配置 nginx 容器的监听端口。HTTP 用于常规反向代理访问，HTTPS 用于证书加载后的 SSL 安全连接。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 2)
-            }
-        }
-    }
-
-    // MARK: - Jellyfin Section
-
-    private var jellyfinSection: some View {
-        VStack(spacing: 12) {
-            FormField(label: "服务器地址") {
-                VStack(alignment: .leading) {
-                    TextField("http://127.0.0.1:8096", text: $configService.config.jellyfin.serverURL)
-                    Text("输入 Jellyfin 源服务地址。")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-
-            FormField(label: "API Key / Token") {
-                SecureField("输入 Jellyfin API Key", text: $configService.config.jellyfin.apiKey)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 24) {
-                    FormField(label: "HTTP 反代端口") {
-                        TextField("8091", value: $configService.config.jellyfin.proxyPort, format: .number)
-                            .frame(width: 120)
-                    }
-                    FormField(label: "HTTPS 反代端口") {
-                        TextField("8095", value: $configService.config.jellyfin.proxyHttpsPort, format: .number)
-                            .frame(width: 120)
-                    }
-                }
-                Text("配置 nginx 容器的监听端口。HTTP 用于常规反向代理访问，HTTPS 用于证书加载后的 SSL 安全连接。")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 2)
-            }
         }
     }
 
@@ -271,7 +133,6 @@ struct ConnectionView: View {
         }
     }
 
-    /// 从已部署的 nginx 配置目录扫描并回填所有设置
     private func scanExistingConfig() {
         let nginxDir = configService.nginxConfigDirectory()
         let scanner = ExistingConfigScanner.shared
@@ -302,34 +163,31 @@ struct ConnectionView: View {
             }
         } else {
             if let v = scanned.serverURL ?? scanned.plexURL {
-                if configService.config.mediaServerType == .emby {
+                switch configService.config.mediaServerType {
+                case .emby:
                     configService.config.emby.serverURL = v
                     filled.append("Emby 地址")
-                } else if configService.config.mediaServerType == .jellyfin {
+                case .jellyfin:
                     configService.config.jellyfin.serverURL = v
                     filled.append("Jellyfin 地址")
-                } else {
+                case .plex:
                     configService.config.plex.serverURL = v
                     filled.append("Plex 地址")
                 }
             }
             if let v = scanned.proxyPort {
-                if configService.config.mediaServerType == .emby {
-                    configService.config.emby.proxyPort = v
-                } else if configService.config.mediaServerType == .jellyfin {
-                    configService.config.jellyfin.proxyPort = v
-                } else {
-                    configService.config.plex.proxyPort = v
+                switch configService.config.mediaServerType {
+                case .emby: configService.config.emby.proxyPort = v
+                case .jellyfin: configService.config.jellyfin.proxyPort = v
+                case .plex: configService.config.plex.proxyPort = v
                 }
                 filled.append("HTTP 端口")
             }
             if let v = scanned.proxyHttpsPort {
-                if configService.config.mediaServerType == .emby {
-                    configService.config.emby.proxyHttpsPort = v
-                } else if configService.config.mediaServerType == .jellyfin {
-                    configService.config.jellyfin.proxyHttpsPort = v
-                } else {
-                    configService.config.plex.proxyHttpsPort = v
+                switch configService.config.mediaServerType {
+                case .emby: configService.config.emby.proxyHttpsPort = v
+                case .jellyfin: configService.config.jellyfin.proxyHttpsPort = v
+                case .plex: configService.config.plex.proxyHttpsPort = v
                 }
                 filled.append("HTTPS 端口")
             }
@@ -371,5 +229,3 @@ struct ConnectionView: View {
         }
     }
 }
-
-

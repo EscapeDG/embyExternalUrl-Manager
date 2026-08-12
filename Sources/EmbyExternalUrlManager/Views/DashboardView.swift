@@ -2,22 +2,22 @@ import SwiftUI
 
 // MARK: - Dashboard View
 
-/// Landing page showing overall system health at a glance.
+/// Landing page: lightweight cards + compact pipeline with deep links.
 struct DashboardView: View {
     @EnvironmentObject var configService: ConfigService
-    @StateObject private var dockerService = DockerService.shared
+    @EnvironmentObject var systemStatus: SystemStatusStore
+    @Environment(\.navigate) private var navigate
     @State private var lastDiagnostics: [DiagnosticResult] = []
     @State private var isDiagnosing = false
+    @State private var pipelineSteps: [PipelineStep] = []
 
     var body: some View {
-        ScrollView {
+        PageScaffold(title: "仪表盘") {
             VStack(alignment: .leading, spacing: 20) {
-                // Page title
                 Text("仪表盘")
                     .font(.largeTitle)
                     .fontWeight(.semibold)
 
-                // 3 status cards
                 LazyVGrid(columns: [
                     GridItem(.flexible(), spacing: 16),
                     GridItem(.flexible(), spacing: 16),
@@ -28,25 +28,28 @@ struct DashboardView: View {
                     certificateCard
                 }
 
-                // Quick action toolbar
+                PipelineChecklistView(steps: pipelineSteps, compact: true)
+
                 actionBar
 
                 Divider()
 
-                // Recent diagnostics
                 recentDiagnosticsSection
             }
-            .padding(24)
         }
-        .onAppear {
-            Task {
-                await dockerService.detect()
-                _ = await dockerService.ps(mediaServerType: configService.config.mediaServerType)
-            }
-        }
+        .onAppear { reevaluate() }
+        .onChange(of: configService.config) { _, _ in reevaluate() }
+        .onChange(of: configService.isDirty) { _, _ in reevaluate() }
+        .onChange(of: systemStatus.containerStatus) { _, _ in reevaluate() }
+        .onChange(of: systemStatus.dockerAvailable) { _, _ in reevaluate() }
+        .onChange(of: systemStatus.certificateSummary) { _, _ in reevaluate() }
     }
 
-    // MARK: - Media Server Card
+    private func reevaluate() {
+        pipelineSteps = DeploymentPipeline.evaluate(configService: configService, status: systemStatus)
+    }
+
+    // MARK: - Cards
 
     private var mediaServerCard: some View {
         cardContent {
@@ -65,94 +68,107 @@ struct DashboardView: View {
             InfoRow(label: "HTTP", value: "\(httpPort)")
             InfoRow(label: "HTTPS", value: "\(httpsPort)")
 
-            Spacer()
-
-            Text("运行诊断检查连通性")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            Button("编辑连接") {
+                navigate.wrappedValue = .mediaServer
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
         } label: {
             Label("媒体服务器", systemImage: "cable.connector")
         }
     }
 
-    // MARK: - Container Card
-
     private var containerCard: some View {
         cardContent {
             HStack(spacing: 8) {
-                StatusDot(color: dockerService.isAvailable ? .green : .red,
-                          isActive: dockerService.isAvailable)
+                StatusDot(color: systemStatus.dockerAvailable ? .green : .red,
+                          isActive: systemStatus.dockerAvailable)
                 Text("Docker 容器")
                     .font(.headline)
                     .fontWeight(.semibold)
                 Spacer()
-                if dockerService.isAvailable {
-                    MetricBadge(dockerService.containerRunning ? "运行中" : "已停止")
+                if systemStatus.dockerAvailable {
+                    MetricBadge(systemStatus.containerRunning ? "运行中" : "已停止")
                 }
             }
 
             Divider()
 
-            InfoRow(label: "引擎", value: dockerService.isAvailable ? "🟢 可用" : "🔴 不可用")
+            InfoRow(label: "引擎", value: systemStatus.dockerAvailable ? "🟢 可用" : "🔴 不可用")
             InfoRow(label: "容器", value: configService.config.mediaServerType.containerName)
             InfoRow(label: "状态", value: containerStatusDisplay)
 
-            Spacer()
-
-            Text(containerActionHint)
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            Button(systemStatus.dockerAvailable ? "生成与部署" : "Docker 环境") {
+                navigate.wrappedValue = systemStatus.dockerAvailable ? .generate : .docker
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
         } label: {
             Label("容器状态", systemImage: "shippingbox")
         }
     }
 
-    // MARK: - Certificate Card
-
     private var certificateCard: some View {
-        cardContent {
+        let summary = systemStatus.certificateSummary
+        let levelColor: Color = {
+            switch summary?.level {
+            case .ok: return .green
+            case .warning: return .orange
+            case .error: return .red
+            default: return .secondary
+            }
+        }()
+
+        return cardContent {
             HStack(spacing: 8) {
-                StatusDot(color: .orange, isActive: true)
+                StatusDot(color: levelColor, isActive: summary != nil)
                 Text("证书")
                     .font(.headline)
                     .fontWeight(.semibold)
                 Spacer()
-                MetricBadge("待检查")
+                MetricBadge(summary?.statusTitle ?? "未检查")
             }
 
             Divider()
 
-            InfoRow(label: "目录", value: certificateDir)
-            InfoRow(label: "域名", value: configService.config.certificateDomains.isEmpty ? "未配置" : configService.config.certificateDomains)
-            InfoRow(label: "到期", value: "前往证书页查看")
+            InfoRow(label: "目录", value: summary?.directory.isEmpty == false ? summary!.directory : certificateDir)
+            InfoRow(label: "主题", value: {
+                let s = summary?.subject ?? ""
+                return s.isEmpty ? "—" : s
+            }())
+            InfoRow(label: "到期", value: {
+                if let days = summary?.daysRemaining {
+                    return summary?.isExpired == true ? "已过期" : "剩余 \(days) 天"
+                }
+                return summary?.statusTitle ?? "前往证书页查看"
+            }())
 
-            Spacer()
-
-            Text("前往「证书」页配置")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            Button("打开证书页") {
+                navigate.wrappedValue = .certificate
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
         } label: {
             Label("证书", systemImage: "lock.shield")
         }
     }
 
-    // MARK: - Card Container (equal height)
-
-    private func cardContent<C: View, L: View>(@ViewBuilder content: @escaping () -> C,
-                                                @ViewBuilder label: @escaping () -> L) -> some View {
+    private func cardContent<C: View, L: View>(
+        @ViewBuilder content: @escaping () -> C,
+        @ViewBuilder label: @escaping () -> L
+    ) -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 content()
             }
-            .frame(maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         } label: {
             label()
         }
         .groupBoxStyle(FormGroupBoxStyle())
-        .frame(maxHeight: .infinity)
     }
 
-    // MARK: - Action Bar
+    // MARK: - Actions
 
     private var actionBar: some View {
         HStack(spacing: 12) {
@@ -165,7 +181,10 @@ struct DashboardView: View {
             .disabled(isDiagnosing)
 
             Button {
-                Task { await dockerService.detect(); _ = await dockerService.ps() }
+                Task {
+                    await systemStatus.refreshAll(configService: configService, force: true)
+                    reevaluate()
+                }
             } label: {
                 Label("刷新状态", systemImage: "arrow.clockwise")
             }
@@ -183,8 +202,6 @@ struct DashboardView: View {
             }
         }
     }
-
-    // MARK: - Recent Diagnostics
 
     private var recentDiagnosticsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -228,6 +245,15 @@ struct DashboardView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
+            if let suggestion = result.suggestion, suggestion.contains("生成") {
+                Button("前往") { navigate.wrappedValue = .generate }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            } else if let suggestion = result.suggestion, suggestion.contains("Docker") {
+                Button("前往") { navigate.wrappedValue = .docker }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
         }
         .padding(10)
         .background(Color.secondary.opacity(0.04))
@@ -265,51 +291,43 @@ struct DashboardView: View {
         return nginxDir.isEmpty ? "未配置" : nginxDir + "/conf.d/cert"
     }
 
-    private var containerActionHint: String {
-        if !dockerService.isAvailable { return "请安装 Docker 或 OrbStack" }
-        if !dockerService.containerRunning { return "在「生成与部署」页启动容器" }
-        return "容器运行正常"
-    }
-
     private var containerStatusDisplay: String {
-        if !dockerService.isAvailable {
+        if !systemStatus.dockerAvailable {
             return "Docker 未运行"
         }
-        if dockerService.containerRunning {
+        if systemStatus.containerRunning {
             return "🟢 运行中"
         }
-        return dockerService.containerStatus.isEmpty ? "🔴 已停止" : "🔴 \(dockerService.containerStatus)"
+        return systemStatus.containerStatus.isEmpty ? "🔴 已停止" : "🔴 \(systemStatus.containerStatus)"
     }
 
     private func runDiagnostics() async {
         isDiagnosing = true
         lastDiagnostics = []
 
+        await systemStatus.refreshAll(configService: configService, force: true)
+        reevaluate()
+
         var results: [DiagnosticResult] = []
 
-        // Test Docker
-        await dockerService.detect()
-        let containerStatus = await dockerService.ps(mediaServerType: configService.config.mediaServerType)
         results.append(DiagnosticResult(
             title: "Docker 引擎",
-            message: dockerService.isAvailable ? "Docker 已安装且守护进程运行中" : "Docker 未安装或守护进程未启动",
-            level: dockerService.isAvailable ? .info : .error,
-            suggestion: dockerService.isAvailable ? nil : "请安装 Docker 或 OrbStack"
+            message: systemStatus.dockerAvailable ? "Docker 已安装且守护进程运行中" : "Docker 未安装或守护进程未启动",
+            level: systemStatus.dockerAvailable ? .info : .error,
+            suggestion: systemStatus.dockerAvailable ? nil : "请安装 Docker 或 OrbStack"
         ))
 
-        // Test container
-        if dockerService.isAvailable {
+        if systemStatus.dockerAvailable {
             results.append(DiagnosticResult(
                 title: "\(configService.config.mediaServerType.rawValue) 容器",
-                message: dockerService.containerRunning ? "容器运行中 (\(containerStatus))" : "容器未运行",
-                level: dockerService.containerRunning ? .info : .warning,
-                suggestion: dockerService.containerRunning ? nil : "请在「生成与部署」页启动容器"
+                message: systemStatus.containerRunning ? "容器运行中 (\(systemStatus.containerStatus))" : "容器未运行",
+                level: systemStatus.containerRunning ? .info : .warning,
+                suggestion: systemStatus.containerRunning ? nil : "请在「生成与部署」页启动容器"
             ))
         }
 
-        // Test nginx config
-        if dockerService.isAvailable && dockerService.containerRunning {
-            let nginxResult = await dockerService.nginxTest(mediaServerType: configService.config.mediaServerType)
+        if systemStatus.dockerAvailable && systemStatus.containerRunning {
+            let nginxResult = await DockerService.shared.nginxTest(mediaServerType: configService.config.mediaServerType)
             results.append(DiagnosticResult(
                 title: "Nginx 配置",
                 message: nginxResult.exitCode == 0 ? "nginx -t 通过" : "nginx -t 失败",
@@ -318,7 +336,6 @@ struct DashboardView: View {
             ))
         }
 
-        // Test deployment directory
         let deployDir = configService.ensureDeploymentDirectory()
         let hasCompose = FileManager.default.fileExists(atPath: deployDir + "/docker-compose.yml")
         results.append(DiagnosticResult(
@@ -327,6 +344,15 @@ struct DashboardView: View {
             level: hasCompose ? .info : .warning,
             suggestion: hasCompose ? nil : "请在「生成与部署」页生成配置"
         ))
+
+        if configService.isDirty {
+            results.append(DiagnosticResult(
+                title: "配置持久化",
+                message: "存在未保存更改；生成时将自动保存",
+                level: .warning,
+                suggestion: nil
+            ))
+        }
 
         await MainActor.run {
             lastDiagnostics = results
@@ -350,5 +376,3 @@ struct DashboardView: View {
         }
     }
 }
-
-

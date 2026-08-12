@@ -3,6 +3,7 @@ import Foundation
 // MARK: - Config Service
 
 /// Manages loading/saving AppConfig, rendering templates, and writing deployment files.
+/// Single write path for `config.json`; UI should only mutate `config` and call `save()`.
 final class ConfigService: ObservableObject {
     static let shared = ConfigService()
 
@@ -10,9 +11,20 @@ final class ConfigService: ObservableObject {
     private let configFileURL: URL
     private let backupDirURL: URL
 
-    @Published var config: AppConfig = .init()
+    /// In-memory configuration. Edits mark `isDirty` until a successful `save()`.
+    @Published var config: AppConfig = .init() {
+        didSet {
+            guard !isApplyingSnapshot else { return }
+            isDirty = (config != lastSavedConfig)
+        }
+    }
+    @Published private(set) var isDirty: Bool = false
+    @Published private(set) var lastSavedAt: Date?
     @Published var lastReport: DeploymentReport?
     @Published var lastPersistenceError: String?
+
+    private var lastSavedConfig: AppConfig = .init()
+    private var isApplyingSnapshot = false
 
     private init() {
         let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -31,18 +43,19 @@ final class ConfigService: ObservableObject {
         lastPersistenceError = nil
         let fm = FileManager.default
         guard fm.fileExists(atPath: configFileURL.path) else {
-            config = AppConfig()
+            applySnapshot(AppConfig(), markSaved: true)
             return
         }
         do {
             let data = try Data(contentsOf: configFileURL)
-            config = try JSONDecoder().decode(AppConfig.self, from: data)
+            let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+            applySnapshot(decoded, markSaved: true)
         } catch {
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
             let backupURL = backupDirURL.appendingPathComponent("config.corrupt.\(stamp).json")
             do {
                 try fm.copyItem(at: configFileURL, to: backupURL)
-                config = AppConfig()
+                applySnapshot(AppConfig(), markSaved: true)
                 lastPersistenceError = "配置文件无法解析，已备份并恢复默认。\(backupURL.lastPathComponent)"
             } catch {
                 lastPersistenceError = "配置文件无法解析且备份失败，已保留原文件与当前配置：\(error.localizedDescription)"
@@ -57,6 +70,9 @@ final class ConfigService: ObservableObject {
             try FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(config)
             try data.write(to: configFileURL, options: .atomic)
+            lastSavedConfig = config
+            isDirty = false
+            lastSavedAt = Date()
             return true
         } catch {
             lastPersistenceError = "保存失败：\(error.localizedDescription)"
@@ -64,10 +80,30 @@ final class ConfigService: ObservableObject {
         }
     }
 
+    /// Saves only when dirty. Returns true if disk matches memory afterward.
+    @discardableResult
+    func saveIfNeeded() -> Bool {
+        if !isDirty { return true }
+        return save()
+    }
+
     @discardableResult
     func resetToDefaults() -> Bool {
-        config = AppConfig()
+        applySnapshot(AppConfig(), markSaved: false)
         return save()
+    }
+
+    private func applySnapshot(_ value: AppConfig, markSaved: Bool) {
+        isApplyingSnapshot = true
+        config = value
+        isApplyingSnapshot = false
+        if markSaved {
+            lastSavedConfig = value
+            isDirty = false
+            lastSavedAt = Date()
+        } else {
+            isDirty = (config != lastSavedConfig)
+        }
     }
 
     // MARK: - Deployment Directory
@@ -95,7 +131,21 @@ final class ConfigService: ObservableObject {
 
     // MARK: - Generate Deployment Files
 
+    /// Generates deployment files. **Always persists dirty config first** so disk and generate stay aligned.
     func generateDeployment() async -> DeploymentReport {
+        // Fundamental gate: never generate from unsaved memory only.
+        if !saveIfNeeded() {
+            let report = DeploymentReport(
+                generatedAt: Date(),
+                targetDirectory: ensureDeploymentDirectory(),
+                filesWritten: [],
+                errors: [lastPersistenceError ?? "配置保存失败，已中止生成。"],
+                warnings: []
+            )
+            await MainActor.run { self.lastReport = report }
+            return report
+        }
+
         let deployDir = ensureDeploymentDirectory()
         let nginxDir = nginxConfigDirectory()
         let nginxConfDir = nginxDir + "/conf.d"
