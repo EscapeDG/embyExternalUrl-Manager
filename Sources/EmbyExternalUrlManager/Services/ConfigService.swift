@@ -26,9 +26,14 @@ final class ConfigService: ObservableObject {
     private var lastSavedConfig: AppConfig = .init()
     private var isApplyingSnapshot = false
 
-    private init() {
-        let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        appSupportDir = paths.appendingPathComponent("embyExternalUrl-Manager", isDirectory: true)
+    /// `appSupportDirectory` 仅供测试注入隔离目录；应用本身只使用 `shared`。
+    init(appSupportDirectory: URL? = nil) {
+        if let appSupportDirectory {
+            appSupportDir = appSupportDirectory
+        } else {
+            let paths = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            appSupportDir = paths.appendingPathComponent("embyExternalUrl-Manager", isDirectory: true)
+        }
         configFileURL = appSupportDir.appendingPathComponent("config.json")
         backupDirURL = appSupportDir.appendingPathComponent("Backups")
 
@@ -129,6 +134,58 @@ final class ConfigService: ObservableObject {
         return ensureDeploymentDirectory() + "/nginx"
     }
 
+    // MARK: - Certificate Directory
+
+    /// nginx 容器只读取 `<nginx 目录>/conf.d/cert`（https.conf 固定引用 /etc/nginx/conf.d/cert）。
+    func nginxCertificateDirectory() -> String {
+        nginxConfigDirectory() + "/conf.d/cert"
+    }
+
+    /// 证书页管理的目录；未单独设置时就是 nginx 读取的目录。
+    func effectiveCertificateDirectory() -> String {
+        let custom = config.certificateDirectory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return custom.isEmpty ? nginxCertificateDirectory() : custom
+    }
+
+    /// 与 nginx 目录相同则不单独记录，避免 nginx 目录变化后残留旧的绝对路径。
+    func normalizedCertificateDirectory(_ path: String) -> String? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let a = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        let b = URL(fileURLWithPath: nginxCertificateDirectory()).standardizedFileURL.path
+        return a == b ? nil : trimmed
+    }
+
+    /// 自定义证书目录不在 nginx 挂载范围内，容器读不到；把证书与私钥同步到 nginx 目录。
+    private func syncCertificatesToNginx(written: inout [String], warnings: inout [String]) {
+        let fm = FileManager.default
+        let source = URL(fileURLWithPath: effectiveCertificateDirectory(), isDirectory: true)
+        let target = URL(fileURLWithPath: nginxCertificateDirectory(), isDirectory: true)
+        guard source.standardizedFileURL.path != target.standardizedFileURL.path else { return }
+
+        func first(_ names: [String]) -> URL? {
+            names.map { source.appendingPathComponent($0) }.first { fm.fileExists(atPath: $0.path) }
+        }
+        guard let cert = first(["fullchain.pem", "cert.pem"]),
+              let key = first(["privkey.key", "key.pem"]) else {
+            warnings.append("证书目录 \(source.path) 中未找到 fullchain.pem / privkey.key，未同步到 nginx 目录。")
+            return
+        }
+        do {
+            try fm.createDirectory(at: target, withIntermediateDirectories: true)
+            for (src, name, mode) in [(cert, "fullchain.pem", 0o644), (key, "privkey.key", 0o600)] {
+                let dest = target.appendingPathComponent(name)
+                if fm.fileExists(atPath: dest.path), fm.contentsEqual(atPath: src.path, andPath: dest.path) { continue }
+                if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+                try fm.copyItem(at: src, to: dest)
+                try fm.setAttributes([.posixPermissions: mode], ofItemAtPath: dest.path)
+                written.append(dest.path)
+            }
+        } catch {
+            warnings.append("同步证书到 nginx 目录失败：\(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Generate Deployment Files
 
     /// Generates deployment files. **Always persists dirty config first** so disk and generate stay aligned.
@@ -216,9 +273,21 @@ final class ConfigService: ObservableObject {
         variables["ROUTE_CACHE_ENABLED"] = config.redirect.routeCacheEnabled ? "true" : "false"
         // Mount paths
         variables["MEDIA_MOUNT_PATHS"] = jsonArray(config.mount.mediaMountPaths)
-        // Path mappings
-        let enabledMappings = config.pathMappings.filter(\.enabled)
-        variables["MEDIA_PATH_MAPPING"] = mediaPathMappingJS(enabledMappings)
+        // Path mappings — keep hand-written entries Manager does not model (only when same server family)
+        let family = Self.skeletonFamily(for: config.mediaServerType)
+        let existingFamily = Self.existingFamily(nginxDir: nginxDir)
+        let canPreserve = existingFamily == nil || existingFamily == family
+        let existingPro = (try? String(contentsOfFile: nginxConfigDir + "/constant-pro.js", encoding: .utf8)) ?? ""
+        let foreignMappings = canPreserve ? ConfigPreserver.foreignPathMappingElements(in: existingPro) : []
+        let enabledMappings = config.pathMappings.filter { $0.enabled && !$0.localPrefix.isEmpty && !$0.remotePrefix.isEmpty }
+        variables["MEDIA_PATH_MAPPING"] = mediaPathMappingJS(enabledMappings, extras: foreignMappings)
+        var notes: [String] = []
+        if !foreignMappings.isEmpty {
+            notes.append("mediaPathMapping：保留了 \(foreignMappings.count) 条手写映射")
+        }
+        if !canPreserve {
+            warnings.append("检测到骨架由 \(existingFamily ?? "") 切换为 \(family)：旧类型的自定义规则（routeRule 等）未沿用，旧文件已备份。")
+        }
         // Docker compose
         variables["DEPLOY_DIR"] = yamlEscape(deployDir)
         variables["NGINX_CONF"] = yamlEscape(nginxDir)
@@ -236,8 +305,18 @@ final class ConfigService: ObservableObject {
             ("https.conf", "https.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("https.conf"), false),
         ]
 
-        if FileManager.default.fileExists(atPath: composeURL.path) {
-            warnings.append("docker-compose.yml 已存在，本次保留未覆盖。如需重新生成，请先删除该文件。")
+        if let existingCompose = try? String(contentsOf: composeURL, encoding: .utf8) {
+            if Self.composeMatches(
+                existingCompose,
+                container: config.mediaServerType.containerName,
+                nginxDir: nginxDir,
+                deployDir: deployDir
+            ) {
+                // 容器名与挂载路径一致：保留用户对 compose 的其它自定义
+            } else {
+                templates.append(("docker-compose.yml", "docker-compose.yml", composeURL, false))
+                warnings.append("docker-compose.yml 的容器名或挂载路径与当前设置不一致，已备份旧文件并重新生成；运行中的容器需在「容器管理」重新启动才会应用。")
+            }
         } else {
             templates.append(("docker-compose.yml", "docker-compose.yml", composeURL, false))
         }
@@ -272,66 +351,35 @@ final class ConfigService: ObservableObject {
                 continue
             }
 
+            var finalContent = rendered
+            if canPreserve,
+               let existing = try? String(contentsOf: destURL, encoding: .utf8) {
+                let merged = ConfigPreserver.merge(rendered: rendered, existing: existing, templateName: templateName)
+                finalContent = merged.content
+                if !merged.preserved.isEmpty {
+                    notes.append("\(name)：保留了 \(merged.preserved.joined(separator: "、"))")
+                }
+            }
+
             do {
-                _ = try renderer.writeRendered(content: rendered, to: destURL, backupDir: backupDir)
+                _ = try renderer.writeRendered(content: finalContent, to: destURL, backupDir: backupDir)
                 writtenFiles.append(destURL.path)
             } catch {
                 errors.append("Failed to write \(name): \(error.localizedDescription)")
             }
         }
 
-        // Dynamically enable/disable HTTPS in active conf depending on SSL certificates, and disable conflicting config files
+        // 自定义证书目录 → 同步到 nginx 实际读取的目录，再按证书是否存在启停 HTTPS
+        syncCertificatesToNginx(written: &writtenFiles, warnings: &warnings)
+        let reconcile = NginxConfReconciler.reconcile(
+            nginxDir: nginxDir,
+            type: config.mediaServerType,
+            hasCerts: NginxConfReconciler.hasCertificates(nginxDir: nginxDir)
+        )
+        writtenFiles.append(contentsOf: reconcile.changed)
+        errors.append(contentsOf: reconcile.errors)
         let activeConfName = config.mediaServerType.nginxConfName
-        let inactiveConfName = config.mediaServerType == .plex ? "emby.conf" : "plex.conf"
-
         let activeConfURL = URL(fileURLWithPath: nginxConfDir).appendingPathComponent(activeConfName)
-        let activeDisabledURL = URL(fileURLWithPath: nginxConfDir).appendingPathComponent("\(activeConfName).disabled")
-        if !FileManager.default.fileExists(atPath: activeConfURL.path),
-           FileManager.default.fileExists(atPath: activeDisabledURL.path) {
-            try? FileManager.default.moveItem(at: activeDisabledURL, to: activeConfURL)
-        }
-
-        let inactiveConfURL = URL(fileURLWithPath: nginxConfDir).appendingPathComponent(inactiveConfName)
-        if FileManager.default.fileExists(atPath: inactiveConfURL.path) {
-            // Rename the inactive configuration file to .disabled so Nginx doesn't load it, preserving it safely
-            let disabledURL = URL(fileURLWithPath: nginxConfDir).appendingPathComponent("\(inactiveConfName).disabled")
-            try? FileManager.default.removeItem(at: disabledURL)
-            try? FileManager.default.moveItem(at: inactiveConfURL, to: disabledURL)
-        }
-
-        let certDir = URL(fileURLWithPath: nginxDir).appendingPathComponent("conf.d/cert")
-        let fullchainFile = certDir.appendingPathComponent("fullchain.pem")
-        let keyFile = certDir.appendingPathComponent("privkey.key")
-        let hasCerts = FileManager.default.fileExists(atPath: fullchainFile.path) && FileManager.default.fileExists(atPath: keyFile.path)
-
-        if FileManager.default.fileExists(atPath: activeConfURL.path),
-           let content = try? String(contentsOf: activeConfURL, encoding: .utf8) {
-            var newContent = content
-            if hasCerts {
-                newContent = newContent.replacingOccurrences(
-                    of: "# include /etc/nginx/conf.d/includes/https.conf;",
-                    with: "include /etc/nginx/conf.d/includes/https.conf;"
-                )
-            } else {
-                newContent = newContent.replacingOccurrences(
-                    of: "include /etc/nginx/conf.d/includes/https.conf;",
-                    with: "# include /etc/nginx/conf.d/includes/https.conf;"
-                )
-                newContent = newContent.replacingOccurrences(
-                    of: "# # include /etc/nginx/conf.d/includes/https.conf;",
-                    with: "# include /etc/nginx/conf.d/includes/https.conf;"
-                )
-            }
-
-            if newContent != content {
-                do {
-                    try newContent.write(to: activeConfURL, atomically: true, encoding: .utf8)
-                    writtenFiles.append(activeConfURL.path)
-                } catch {
-                    errors.append("Failed to update \(activeConfName) SSL configuration: \(error.localizedDescription)")
-                }
-            }
-        }
 
         // Skeleton checks: parameter generate does not replace full upstream nginx tree.
         let fm = FileManager.default
@@ -365,7 +413,8 @@ final class ConfigService: ObservableObject {
             targetDirectory: deployDir,
             filesWritten: writtenFiles,
             errors: errors,
-            warnings: warnings
+            warnings: warnings,
+            notes: notes
         )
 
         await MainActor.run {
@@ -384,6 +433,7 @@ final class ConfigService: ObservableObject {
     }
 
     private func jsonArray(_ values: [String]) -> String {
+        let values = values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let data = try? JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted])
         let str = data.flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         return str.replacingOccurrences(of: "\\/", with: "/")
@@ -394,14 +444,42 @@ final class ConfigService: ObservableObject {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    private func mediaPathMappingJS(_ mappings: [PathMapping]) -> String {
-        let rows: [[Any]] = mappings.map { [0, 0, $0.localPrefix, $0.remotePrefix] }
-        guard JSONSerialization.isValidJSONObject(rows),
-              let data = try? JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted]),
-              let str = String(data: data, encoding: .utf8) else {
-            return "[]"
+    /// Manager 管理的条目用 `[0, 0, "本地", "远端"]` 单行格式（上游格式，也便于「扫描已有配置」读回）；
+    /// `extras` 是用户手写的其它格式条目，原样追加。
+    private func mediaPathMappingJS(_ mappings: [PathMapping], extras: [String] = []) -> String {
+        let rows = mappings.map { "[0, 0, \(jsonString($0.localPrefix)), \(jsonString($0.remotePrefix))]" } + extras
+        guard !rows.isEmpty else { return "[]" }
+        return "[\n  " + rows.joined(separator: ",\n  ") + "\n]"
+    }
+
+    /// plex 与 emby/jellyfin 使用两套不同的上游骨架。
+    static func skeletonFamily(for type: MediaServerType) -> String {
+        type == .plex ? "plex" : "emby"
+    }
+
+    /// 已生成的 constant.js 属于哪种骨架；读不出时回退到同步写入的类型标记。
+    static func existingFamily(nginxDir: String) -> String? {
+        if let text = try? String(contentsOfFile: nginxDir + "/conf.d/constant.js", encoding: .utf8) {
+            if text.contains("plexHost") { return "plex" }
+            if text.contains("embyHost") { return "emby" }
         }
-        return str.replacingOccurrences(of: "\\/", with: "/")
+        if let marker = try? String(contentsOfFile: nginxDir + "/.manager-skeleton-type", encoding: .utf8) {
+            let kind = marker.trimmingCharacters(in: .whitespacesAndNewlines)
+            if kind == "plex" || kind == "emby" { return kind }
+        }
+        return nil
+    }
+
+    /// compose 中的容器名与四个挂载源是否仍与当前设置一致（忽略引号差异）。
+    static func composeMatches(_ text: String, container: String, nginxDir: String, deployDir: String) -> Bool {
+        let flat = text.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: "'", with: "")
+        return [
+            "container_name: \(container)",
+            "\(nginxDir)/nginx.conf:/etc/nginx/nginx.conf",
+            "\(nginxDir)/conf.d:/etc/nginx/conf.d",
+            "\(deployDir)/logs:/var/log/nginx",
+            "\(deployDir)/cache:/var/cache/nginx"
+        ].allSatisfy { flat.contains($0) }
     }
 
     private static var templatesBundle: Bundle {
@@ -425,5 +503,64 @@ final class ConfigService: ObservableObject {
             return b
         }
         return mainBundle
+    }
+}
+
+// MARK: - Nginx conf reconciler
+
+/// 让 nginx 只加载当前媒体类型的 conf，并按证书是否存在启停 HTTPS include。
+/// 「生成」与「上游同步」共用，避免同步后 plex.conf / emby.conf 同时生效。
+enum NginxConfReconciler {
+
+    static func hasCertificates(nginxDir: String) -> Bool {
+        let fm = FileManager.default
+        let dir = nginxDir + "/conf.d/cert"
+        return fm.fileExists(atPath: dir + "/fullchain.pem") && fm.fileExists(atPath: dir + "/privkey.key")
+    }
+
+    static func reconcile(
+        nginxDir: String,
+        type: MediaServerType,
+        hasCerts: Bool
+    ) -> (changed: [String], errors: [String]) {
+        let fm = FileManager.default
+        let confDir = URL(fileURLWithPath: nginxDir).appendingPathComponent("conf.d")
+        var changed: [String] = []
+        var errors: [String] = []
+
+        let activeName = type.nginxConfName
+        let inactiveName = type == .plex ? "emby.conf" : "plex.conf"
+        let active = confDir.appendingPathComponent(activeName)
+        let activeDisabled = confDir.appendingPathComponent("\(activeName).disabled")
+        let inactive = confDir.appendingPathComponent(inactiveName)
+
+        if !fm.fileExists(atPath: active.path), fm.fileExists(atPath: activeDisabled.path) {
+            try? fm.moveItem(at: activeDisabled, to: active)
+        }
+        if fm.fileExists(atPath: inactive.path) {
+            let disabled = confDir.appendingPathComponent("\(inactiveName).disabled")
+            try? fm.removeItem(at: disabled)
+            try? fm.moveItem(at: inactive, to: disabled)
+        }
+
+        let include = "include /etc/nginx/conf.d/includes/https.conf;"
+        if let content = try? String(contentsOf: active, encoding: .utf8) {
+            var updated = content
+            if hasCerts {
+                updated = updated.replacingOccurrences(of: "# " + include, with: include)
+            } else {
+                updated = updated.replacingOccurrences(of: include, with: "# " + include)
+                updated = updated.replacingOccurrences(of: "# # " + include, with: "# " + include)
+            }
+            if updated != content {
+                do {
+                    try updated.write(to: active, atomically: true, encoding: .utf8)
+                    changed.append(active.path)
+                } catch {
+                    errors.append("Failed to update \(activeName) SSL configuration: \(error.localizedDescription)")
+                }
+            }
+        }
+        return (changed, errors)
     }
 }

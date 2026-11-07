@@ -266,6 +266,9 @@ struct GenerateView: View {
             ForEach(report.filesWritten, id: \.self) { file in
                 Text("✓ \(URL(fileURLWithPath: file).lastPathComponent)").font(.caption).foregroundColor(.secondary)
             }
+            ForEach(report.notes, id: \.self) { note in
+                Text("• \(note)").font(.caption).foregroundColor(.secondary)
+            }
             ForEach(report.warnings, id: \.self) { warning in
                 Text("⚠ \(warning)").font(.caption).foregroundColor(.orange)
             }

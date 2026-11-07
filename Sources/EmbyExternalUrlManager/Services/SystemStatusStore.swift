@@ -119,9 +119,6 @@ final class SystemStatusStore: ObservableObject {
         let type = configService.config.mediaServerType
         await refreshDocker(mediaServerType: type, force: force)
 
-        let nginxDir = configService.nginxConfigDirectory()
-        let certDir = configService.config.certificateDirectory?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolved = (certDir?.isEmpty == false) ? certDir! : (nginxDir + "/conf.d/cert")
-        await refreshCertificate(certDirectory: resolved)
+        await refreshCertificate(certDirectory: configService.effectiveCertificateDirectory())
     }
 }

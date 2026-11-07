@@ -315,7 +315,7 @@ struct CertificateView: View {
 
     // MARK: - Helpers (unchanged from original)
 
-    private var defaultCertDirectory: String { configService.nginxConfigDirectory() + "/conf.d/cert" }
+    private var defaultCertDirectory: String { configService.nginxCertificateDirectory() }
     private var effectiveCertDirectory: String { certDirectory.isEmpty ? defaultCertDirectory : certDirectory }
 
     private var statusTitle: String {
@@ -350,7 +350,7 @@ struct CertificateView: View {
         isUpdating = true; reloadResult = nil
         let targetDirectory = effectiveCertDirectory
         await MainActor.run {
-            configService.config.certificateDirectory = targetDirectory
+            configService.config.certificateDirectory = configService.normalizedCertificateDirectory(targetDirectory)
             persistenceWarning = configService.save() ? nil : (configService.lastPersistenceError ?? "保存证书目录失败。")
         }
         let updateReport = await CertificateService.shared.updateCertificate(
@@ -409,7 +409,7 @@ struct CertificateView: View {
     }
 
     private func saveAcmeConfig() {
-        configService.config.certificateDirectory = effectiveCertDirectory
+        configService.config.certificateDirectory = configService.normalizedCertificateDirectory(effectiveCertDirectory)
         configService.config.certificateDomains = acmeDomains
         configService.config.certificateEmail = acmeEmail
         configService.config.certificateIssueMode = acmeMode.rawValue

@@ -287,8 +287,7 @@ struct DashboardView: View {
     }
 
     private var certificateDir: String {
-        let nginxDir = configService.nginxConfigDirectory()
-        return nginxDir.isEmpty ? "未配置" : nginxDir + "/conf.d/cert"
+        configService.effectiveCertificateDirectory()
     }
 
     private var containerStatusDisplay: String {
@@ -309,6 +308,19 @@ struct DashboardView: View {
         reevaluate()
 
         var results: [DiagnosticResult] = []
+
+        let snapshot = configService.config
+        switch snapshot.mediaServerType {
+        case .plex:
+            results.append(await PlexService.shared.ping(serverURL: snapshot.plex.serverURL))
+        case .emby:
+            results.append(await EmbyJellyfinService.shared.ping(serverURL: snapshot.emby.serverURL, serverType: .emby))
+            results.append(await EmbyJellyfinService.shared.testAPIKey(serverURL: snapshot.emby.serverURL, apiKey: snapshot.emby.apiKey, serverType: .emby))
+        case .jellyfin:
+            results.append(await EmbyJellyfinService.shared.ping(serverURL: snapshot.jellyfin.serverURL, serverType: .jellyfin))
+            results.append(await EmbyJellyfinService.shared.testAPIKey(serverURL: snapshot.jellyfin.serverURL, apiKey: snapshot.jellyfin.apiKey, serverType: .jellyfin))
+        }
+        results.append(contentsOf: await OpenListService.shared.runAllTests(config: snapshot))
 
         results.append(DiagnosticResult(
             title: "Docker 引擎",

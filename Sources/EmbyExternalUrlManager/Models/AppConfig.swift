@@ -336,4 +336,6 @@ struct DeploymentReport: Equatable {
     let filesWritten: [String]
     let errors: [String]
     let warnings: [String]
+    /// 本次生成中沿用/保留的用户参数等说明（非警告）。
+    var notes: [String] = []
 }

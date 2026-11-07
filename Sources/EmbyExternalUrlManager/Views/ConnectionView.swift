@@ -7,6 +7,8 @@ struct ConnectionView: View {
     @State private var showResetConfirm = false
     @State private var scanMessage: String?
     @State private var scanSuccess = false
+    @State private var openListResults: [DiagnosticResult] = []
+    @State private var isTestingOpenList = false
 
     var body: some View {
         PageScaffold(title: "媒体服务器") {
@@ -48,6 +50,29 @@ struct ConnectionView: View {
                                 Text("用于客户端自请求直链的场景，如 115 网盘需要公网可访问的地址")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                            }
+                        }
+                        HStack(spacing: 10) {
+                            Button {
+                                testOpenList()
+                            } label: {
+                                Label("测试 OpenList", systemImage: "network")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isTestingOpenList)
+                            if isTestingOpenList { ProgressView().scaleEffect(0.7) }
+                        }
+                        ForEach(openListResults) { result in
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: result.level == .info ? "checkmark.circle.fill" : (result.level == .warning ? "exclamationmark.triangle.fill" : "xmark.octagon.fill"))
+                                    .foregroundColor(result.level == .info ? .green : (result.level == .warning ? .orange : .red))
+                                    .font(.caption)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(result.title) · \(result.message)").font(.caption)
+                                    if let suggestion = result.suggestion {
+                                        Text(suggestion).font(.caption2).foregroundColor(.secondary)
+                                    }
+                                }
                             }
                         }
                     }
@@ -122,6 +147,19 @@ struct ConnectionView: View {
     }
 
     // MARK: - Helpers
+
+    private func testOpenList() {
+        isTestingOpenList = true
+        openListResults = []
+        let snapshot = configService.config
+        Task {
+            let results = await OpenListService.shared.runAllTests(config: snapshot)
+            await MainActor.run {
+                openListResults = results
+                isTestingOpenList = false
+            }
+        }
+    }
 
     private func selectFolder(_ completion: @escaping (String) -> Void) {
         let panel = NSOpenPanel()

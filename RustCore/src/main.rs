@@ -461,6 +461,7 @@ fn certificate_failure<S: Into<String>, M: Into<String>>(
 fn sync_upstream(options: &HashMap<String, String>) -> SyncReport {
     let source_directory = get_option(options, "source").unwrap_or_default();
     let target_nginx_directory = get_option(options, "target").unwrap_or_default();
+    let server_type = normalize_server_type(&get_option(options, "server-type").unwrap_or_default());
 
     if source_directory.is_empty() {
         return sync_failure("", target_nginx_directory, "缺少上游目录");
@@ -486,6 +487,10 @@ fn sync_upstream(options: &HashMap<String, String>) -> SyncReport {
         );
     }
 
+    // 目标目录里现有骨架属于哪种媒体服务器；类型切换时，不能继续保护旧类型的上游文件。
+    let previous_type = detect_skeleton_type(&target_root);
+    let switching = matches!((&previous_type, &server_type), (Some(old), Some(new)) if old != new);
+
     let mut files = Vec::new();
     if let Err(error) = walk_regular_files(&source_nginx, &mut files) {
         return sync_failure(
@@ -505,7 +510,10 @@ fn sync_upstream(options: &HashMap<String, String>) -> SyncReport {
         let relative = relative_slash_path(&source_nginx, &file);
         let destination = target_root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
 
-        if is_protected(&relative) && destination.exists() {
+        if is_protected(&relative)
+            && destination.exists()
+            && !(switching && !is_manager_generated(&relative, server_type.as_deref()))
+        {
             protected_files.push(relative);
             continue;
         }
@@ -547,6 +555,14 @@ fn sync_upstream(options: &HashMap<String, String>) -> SyncReport {
         match fs::copy(&file, &destination) {
             Ok(_) => copied_files.push(relative),
             Err(error) => errors.push(format!("{relative}: 复制失败：{error}")),
+        }
+    }
+
+    if errors.is_empty() {
+        if let Some(kind) = &server_type {
+            if let Err(error) = fs::write(target_root.join(SKELETON_MARKER), format!("{kind}\n")) {
+                errors.push(format!("{SKELETON_MARKER}: 无法写入骨架类型标记：{error}"));
+            }
         }
     }
 
@@ -617,6 +633,58 @@ fn is_protected(relative_path: &str) -> bool {
         || relative_path.starts_with("conf.d/cert/")
         || (relative_path.starts_with("conf.d/includes/") && relative_path.ends_with(".conf"))
         || (relative_path.starts_with("conf.d/config/constant") && relative_path.ends_with(".js"))
+}
+
+const SKELETON_MARKER: &str = ".manager-skeleton-type";
+
+/// 把 plex / emby / jellyfin 归一为骨架类型：plex 或 emby（jellyfin 复用 emby2Alist 骨架）。
+fn normalize_server_type(value: &str) -> Option<String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "plex" => Some("plex".to_string()),
+        "emby" | "jellyfin" => Some("emby".to_string()),
+        _ => None,
+    }
+}
+
+/// 判断目标目录现有骨架属于 plex 还是 emby：优先读标记文件，其次从 constant.js / plex.js / emby.js 推断。
+fn detect_skeleton_type(target_root: &Path) -> Option<String> {
+    if let Ok(text) = fs::read_to_string(target_root.join(SKELETON_MARKER)) {
+        if let Some(kind) = normalize_server_type(&text) {
+            return Some(kind);
+        }
+    }
+    let conf_d = target_root.join("conf.d");
+    if let Ok(text) = fs::read_to_string(conf_d.join("constant.js")) {
+        if text.contains("plexHost") {
+            return Some("plex".to_string());
+        }
+        if text.contains("embyHost") {
+            return Some("emby".to_string());
+        }
+    }
+    let has_plex = conf_d.join("plex.js").is_file();
+    let has_emby = conf_d.join("emby.js").is_file();
+    match (has_plex, has_emby) {
+        (true, false) => Some("plex".to_string()),
+        (false, true) => Some("emby".to_string()),
+        _ => None,
+    }
+}
+
+/// 由 Manager 「生成」步骤写入的文件；类型切换后仍保护，等待重新生成覆盖。
+/// 其余受保护文件（constant-common / strm / symlink / nginx、proxy-header.conf 等）属于上游骨架，
+/// 两种骨架内容不同，类型切换时必须替换（同步前会备份）。
+fn is_manager_generated(relative_path: &str, server_type: Option<&str>) -> bool {
+    matches!(
+        relative_path,
+        "conf.d/constant.js"
+            | "conf.d/config/constant-mount.js"
+            | "conf.d/config/constant-pro.js"
+            | "conf.d/config/constant-transcode.js"
+            | "conf.d/includes/http.conf"
+            | "conf.d/includes/https.conf"
+    ) || relative_path.starts_with("conf.d/cert/")
+        || (relative_path == "conf.d/config/constant-ext.js" && server_type == Some("emby"))
 }
 
 fn copy_replacing(source: &Path, destination: &Path, backups: &mut Vec<String>) -> io::Result<bool> {
@@ -817,6 +885,40 @@ mod tests {
         assert!(is_protected("conf.d/cert/cert.pem"));
         assert!(!is_protected("nginx.conf"));
         assert!(!is_protected("conf.d/example.js"));
+    }
+
+    #[test]
+    fn type_switch_replaces_upstream_files_but_keeps_generated_ones() {
+        let base = std::env::temp_dir().join(format!("p2a-test-{}", timestamp()));
+        let source = base.join("src/nginx");
+        let target = base.join("dst");
+        for (root, tag) in [(&source, "emby-upstream"), (&target, "plex-old")] {
+            fs::create_dir_all(root.join("conf.d/config")).unwrap();
+            fs::write(root.join("nginx.conf"), "x").unwrap();
+            fs::write(root.join("conf.d/config/constant-common.js"), tag).unwrap();
+            fs::write(root.join("conf.d/config/constant-pro.js"), tag).unwrap();
+        }
+        fs::write(target.join("conf.d/plex.js"), "p").unwrap();
+
+        let mut options = HashMap::new();
+        options.insert("source".to_string(), path_string(&source));
+        options.insert("target".to_string(), path_string(&target));
+        options.insert("server-type".to_string(), "emby".to_string());
+        let report = sync_upstream(&options);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+
+        // 上游骨架文件被替换，生成文件仍保护
+        assert_eq!(fs::read_to_string(target.join("conf.d/config/constant-common.js")).unwrap(), "emby-upstream");
+        assert_eq!(fs::read_to_string(target.join("conf.d/config/constant-pro.js")).unwrap(), "plex-old");
+        assert_eq!(fs::read_to_string(target.join(SKELETON_MARKER)).unwrap().trim(), "emby");
+        assert!(!report.backup_files.is_empty());
+
+        // 同类型再次同步：全部保护
+        fs::write(target.join("conf.d/config/constant-common.js"), "user-edit").unwrap();
+        let report = sync_upstream(&options);
+        assert!(report.protected_files.contains(&"conf.d/config/constant-common.js".to_string()));
+        assert_eq!(fs::read_to_string(target.join("conf.d/config/constant-common.js")).unwrap(), "user-edit");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

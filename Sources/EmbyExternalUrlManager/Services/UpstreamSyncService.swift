@@ -76,10 +76,12 @@ final class UpstreamSyncService: @unchecked Sendable {
         let resolvedSource = resolveSourceNginxDirectory(sourceDirectory: sourceDirectory, serverType: serverType) ?? sourceDirectory
         return await withCheckedContinuation { continuation in
             queue.async {
-                continuation.resume(returning: self.syncPreservingParametersSync(
+                let report = self.syncPreservingParametersSync(
                     sourceDirectory: resolvedSource,
-                    targetNginxDirectory: targetNginxDirectory
-                ))
+                    targetNginxDirectory: targetNginxDirectory,
+                    serverType: serverType
+                )
+                continuation.resume(returning: self.reconcileConfs(report, serverType: serverType))
             }
         }
     }
@@ -98,16 +100,39 @@ final class UpstreamSyncService: @unchecked Sendable {
         }?.path
     }
 
+    /// 同步成功后立刻让 nginx 只加载当前类型的 conf，避免 plex.conf / emby.conf 同时生效。
+    private func reconcileConfs(_ report: SyncReport, serverType: MediaServerType) -> SyncReport {
+        guard report.succeeded else { return report }
+        let nginxDir = report.targetNginxDirectory
+        let result = NginxConfReconciler.reconcile(
+            nginxDir: nginxDir,
+            type: serverType,
+            hasCerts: NginxConfReconciler.hasCertificates(nginxDir: nginxDir)
+        )
+        guard !result.errors.isEmpty else { return report }
+        return SyncReport(
+            sourceNginxDirectory: report.sourceNginxDirectory,
+            targetNginxDirectory: report.targetNginxDirectory,
+            copiedFiles: report.copiedFiles,
+            skippedFiles: report.skippedFiles,
+            protectedFiles: report.protectedFiles,
+            backupFiles: report.backupFiles,
+            errors: report.errors + result.errors
+        )
+    }
+
     private func syncPreservingParametersSync(
         sourceDirectory: String,
-        targetNginxDirectory: String
+        targetNginxDirectory: String,
+        serverType: MediaServerType
     ) -> SyncReport {
         let result = RustCoreService.shared.decode(
             SyncReport.self,
             arguments: [
                 "upstream-sync",
                 "--source", sourceDirectory,
-                "--target", targetNginxDirectory
+                "--target", targetNginxDirectory,
+                "--server-type", serverType.rawValue.lowercased()
             ]
         )
 
