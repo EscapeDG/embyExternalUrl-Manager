@@ -1,5 +1,24 @@
 # embyExternalUrl-Manager Release Notes
 
+## 1.1.1 (111)
+
+### 修复（架构核查后）
+
+- **OpenList 检测**：按响应体 `code` 判断（OpenList 错误 Token 也返回 HTTP 200），增加目录读取检测；仪表盘诊断与「媒体服务器」页接入 OpenList / 媒体服务器连通与 API Key 检测。
+- **Plex ⇄ Emby/Jellyfin 切换**：上游同步识别骨架类型（`.manager-skeleton-type`），切换时替换上游自带文件并只保留当前类型的 nginx conf，不再两套骨架混杂。
+- **保留用户参数**：生成时保留手写的 `routeRule`、`alistRawUrlMapping`、`clientSelfAlistRule`、ext 各项及非 Manager 格式的路径映射；`enable` 类字段只更新开关。
+- **证书目录统一**：自定义证书目录在生成 / 续期时同步到 nginx 实际读取的 `conf.d/cert`。
+- **Compose 随配置更新**：容器名或挂载源变化时备份并重新生成 `docker-compose.yml`；一致时保留用户自定义。
+- **外部命令**：统一 `ProcessRunner`（超时、管道排空）；PFX / 私钥密码改走环境变量，不再出现在命令行。
+- **容器管理**：Docker 状态单源；启动 / 停止 / 重启统一接口，"停止"改为 `compose stop`；生成后提示"验证并重载"，先 `nginx -t` 再 reload。
+- **ACME webroot** 接入 nginx（`acme-challenge.conf` + compose 挂载）；Plex 默认 HTTPS 端口改为 8099，Jellyfin 为 8092/8097。
+- 其它：主窗口不再多开；上游同步页保存只写本页字段；备份保留最近若干份；模板内容未变不重写。
+
+### 限制
+
+- 仍为 ad-hoc 签名，未公证。
+- 未在真实 Docker / OpenList / Plex 环境做 302 smoke 测试，菜单栏与生成页界面点击未做界面验证。
+
 ## 1.1.0 (110)
 
 ### 架构治理（从补丁到契约）
