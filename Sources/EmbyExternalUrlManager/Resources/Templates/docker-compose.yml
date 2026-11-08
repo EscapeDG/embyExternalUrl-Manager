@@ -10,5 +10,6 @@ services:
       - "{{NGINX_CONF}}/conf.d:/etc/nginx/conf.d"
       - "{{DEPLOY_DIR}}/logs:/var/log/nginx"
       - "{{DEPLOY_DIR}}/cache:/var/cache/nginx"
+      - "{{DEPLOY_DIR}}/acme-webroot:/usr/share/nginx/acme-webroot:ro"
     environment:
       - TZ=Asia/Shanghai

@@ -85,6 +85,29 @@ final class ConfigService: ObservableObject {
         }
     }
 
+    /// 只把指定字段写入磁盘，不连带保存其它页面尚未保存的修改。
+    /// 内存中的 `config` 同步应用同样的修改，`isDirty` 仍反映其余未保存内容。
+    @discardableResult
+    func persistPartial(_ mutate: (inout AppConfig) -> Void) -> Bool {
+        lastPersistenceError = nil
+        var onDisk = lastSavedConfig
+        mutate(&onDisk)
+        do {
+            try FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
+            try JSONEncoder().encode(onDisk).write(to: configFileURL, options: .atomic)
+        } catch {
+            lastPersistenceError = "保存失败：\(error.localizedDescription)"
+            return false
+        }
+        lastSavedConfig = onDisk
+        lastSavedAt = Date()
+        var inMemory = config
+        mutate(&inMemory)
+        config = inMemory
+        isDirty = (config != lastSavedConfig)
+        return true
+    }
+
     /// Saves only when dirty. Returns true if disk matches memory afterward.
     @discardableResult
     func saveIfNeeded() -> Bool {
@@ -113,25 +136,27 @@ final class ConfigService: ObservableObject {
 
     // MARK: - Deployment Directory
 
+    /// 部署目录路径（纯计算，不创建目录；界面渲染 / 状态检查使用）。
+    func deploymentDirectoryPath() -> String {
+        let custom = config.deploymentDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty { return custom }
+        return appSupportDir.appendingPathComponent(config.mediaServerType.deploymentSubfolder).path
+    }
+
+    /// 部署目录路径，并确保 logs / cache / acme-webroot 子目录存在（执行动作前使用）。
     func ensureDeploymentDirectory() -> String {
-        let dir: String
-        if !config.deploymentDirectory.isEmpty {
-            dir = config.deploymentDirectory
-        } else {
-            dir = appSupportDir.appendingPathComponent(config.mediaServerType.deploymentSubfolder).path
+        let dir = deploymentDirectoryPath()
+        for sub in ["", "/logs", "/cache", "/acme-webroot"] {
+            try? FileManager.default.createDirectory(at: URL(fileURLWithPath: dir + sub), withIntermediateDirectories: true)
         }
-        try? FileManager.default.createDirectory(at: URL(fileURLWithPath: dir), withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: URL(fileURLWithPath: dir + "/logs"), withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: URL(fileURLWithPath: dir + "/cache"), withIntermediateDirectories: true)
         return dir
     }
 
+    /// nginx 配置目录路径（纯计算，不创建目录）。
     func nginxConfigDirectory() -> String {
-        if !config.nginxConfigDirectory.isEmpty {
-            return config.nginxConfigDirectory
-        }
-        // Default: look for nginx config inside deployment directory
-        return ensureDeploymentDirectory() + "/nginx"
+        let custom = config.nginxConfigDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty { return custom }
+        return deploymentDirectoryPath() + "/nginx"
     }
 
     // MARK: - Certificate Directory
@@ -189,6 +214,7 @@ final class ConfigService: ObservableObject {
     // MARK: - Generate Deployment Files
 
     /// Generates deployment files. **Always persists dirty config first** so disk and generate stay aligned.
+    @MainActor
     func generateDeployment() async -> DeploymentReport {
         // Fundamental gate: never generate from unsaved memory only.
         if !saveIfNeeded() {
@@ -199,7 +225,7 @@ final class ConfigService: ObservableObject {
                 errors: [lastPersistenceError ?? "配置保存失败，已中止生成。"],
                 warnings: []
             )
-            await MainActor.run { self.lastReport = report }
+            self.lastReport = report
             return report
         }
 
@@ -305,6 +331,15 @@ final class ConfigService: ObservableObject {
             ("https.conf", "https.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("https.conf"), false),
         ]
 
+        // ACME webroot 验证：nginx 把 /.well-known/acme-challenge/ 指向挂载进容器的 acme-webroot
+        try? FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: nginxConfDir + "/custome/location"), withIntermediateDirectories: true
+        )
+        templates.append((
+            "acme-challenge.conf", "acme-challenge.conf",
+            URL(fileURLWithPath: nginxConfDir + "/custome/location/acme-challenge.conf"), false
+        ))
+
         if let existingCompose = try? String(contentsOf: composeURL, encoding: .utf8) {
             if Self.composeMatches(
                 existingCompose,
@@ -313,6 +348,9 @@ final class ConfigService: ObservableObject {
                 deployDir: deployDir
             ) {
                 // 容器名与挂载路径一致：保留用户对 compose 的其它自定义
+                if !existingCompose.contains("/usr/share/nginx/acme-webroot") {
+                    warnings.append("docker-compose.yml 没有 acme-webroot 挂载；要使用 Webroot 方式签发证书，请删除该文件后重新生成（旧文件会先备份）。")
+                }
             } else {
                 templates.append(("docker-compose.yml", "docker-compose.yml", composeURL, false))
                 warnings.append("docker-compose.yml 的容器名或挂载路径与当前设置不一致，已备份旧文件并重新生成；运行中的容器需在「容器管理」重新启动才会应用。")
@@ -417,10 +455,7 @@ final class ConfigService: ObservableObject {
             notes: notes
         )
 
-        await MainActor.run {
-            self.lastReport = report
-        }
-
+        self.lastReport = report
         return report
     }
 

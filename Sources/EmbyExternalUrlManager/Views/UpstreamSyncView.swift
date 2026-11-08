@@ -17,10 +17,8 @@ struct UpstreamSyncView: View {
     @State private var persistenceWarning: String?
 
     var body: some View {
-        ScrollView {
+        PageScaffold(title: "上游同步") {
             VStack(alignment: .leading, spacing: 24) {
-                sectionHeader("上游同步")
-
                 Text("更新上游脚本，同时保留本地参数、端口、证书和生成配置。")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -37,7 +35,7 @@ struct UpstreamSyncView: View {
 
                     FormField(label: "部署目录") {
                         HStack {
-                            Text(configService.ensureDeploymentDirectory())
+                            Text(configService.deploymentDirectoryPath())
                                 .font(.system(.body, design: .monospaced))
                                 .textSelection(.enabled)
                             Spacer()
@@ -69,7 +67,7 @@ struct UpstreamSyncView: View {
 
                     FormField(label: "本地上游") {
                         directoryRow(
-                            placeholder: "/Users/song/Desktop/plex",
+                            placeholder: "/path/to/embyExternalUrl",
                             text: $upstreamDirectory,
                             buttonTitle: "选择上游"
                         )
@@ -141,15 +139,19 @@ struct UpstreamSyncView: View {
                 if let reloadResult {
                     CommandOutputView(title: "nginx reload", result: reloadResult)
                 }
-
-                Spacer()
             }
-            .padding(24)
         }
-        .navigationTitle("上游同步")
         .onAppear {
-            if upstreamDirectory.isEmpty {
-                upstreamDirectory = configService.config.upstreamRepoDirectory
+            let defaultCache = UpstreamSyncService.shared.defaultOnlineCacheDirectory()
+            let configured = configService.config
+            // 旧版本曾把在线缓存目录也记在「本地上游」字段里，这里不再当作本地上游显示
+            var local = configured.upstreamRepoDirectory
+            if local == defaultCache || (!configured.upstreamOnlineCacheDirectory.isEmpty && local == configured.upstreamOnlineCacheDirectory) {
+                local = ""
+            }
+            if upstreamDirectory.isEmpty { upstreamDirectory = local }
+            if !configured.upstreamOnlineCacheDirectory.isEmpty {
+                onlineCacheDirectory = configured.upstreamOnlineCacheDirectory
             }
         }
     }
@@ -185,8 +187,8 @@ struct UpstreamSyncView: View {
         let target = effectiveTargetDirectory
 
         await MainActor.run {
-            configService.config.upstreamRepoDirectory = cache
-            persistenceWarning = configService.save() ? nil : (configService.lastPersistenceError ?? "保存上游缓存目录失败。")
+            persistenceWarning = configService.persistPartial { $0.upstreamOnlineCacheDirectory = cache }
+                ? nil : (configService.lastPersistenceError ?? "保存上游缓存目录失败。")
         }
 
         let online = await UpstreamSyncService.shared.syncOnlineRepository(
@@ -230,8 +232,8 @@ struct UpstreamSyncView: View {
         let source = upstreamDirectory
         let target = effectiveTargetDirectory
         await MainActor.run {
-            configService.config.upstreamRepoDirectory = source
-            persistenceWarning = configService.save() ? nil : (configService.lastPersistenceError ?? "保存上游目录失败。")
+            persistenceWarning = configService.persistPartial { $0.upstreamRepoDirectory = source }
+                ? nil : (configService.lastPersistenceError ?? "保存上游目录失败。")
         }
 
         var pull: CommandResult?
@@ -265,10 +267,6 @@ struct UpstreamSyncView: View {
         }
     }
 
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title).font(.title3).fontWeight(.semibold)
-    }
-
     private func directoryRow(
         placeholder: String,
         text: Binding<String>,
@@ -278,7 +276,7 @@ struct UpstreamSyncView: View {
             TextField(placeholder, text: text)
                 .font(.system(.body, design: .monospaced))
             Button(buttonTitle) {
-                selectFolder { text.wrappedValue = $0 }
+                FolderPicker.choose { text.wrappedValue = $0 }
             }
             .buttonStyle(.bordered)
             Button {
@@ -331,18 +329,6 @@ struct UpstreamSyncView: View {
                         .foregroundColor(.secondary)
                 }
             }
-        }
-    }
-
-
-
-    private func selectFolder(_ completion: @escaping (String) -> Void) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            completion(url.path)
         }
     }
 }

@@ -12,6 +12,9 @@ struct GenerateView: View {
     @State private var containerLogs: String = ""
     @State private var lifecycleResult: CommandResult?
     @State private var pipelineSteps: [PipelineStep] = []
+    @State private var needsReload = false
+    @State private var reloadResult: CommandResult?
+    @State private var isReloading = false
 
     var body: some View {
         PageScaffold(title: "生成与部署") {
@@ -46,6 +49,26 @@ struct GenerateView: View {
 
                         if let report = configService.lastReport ?? lastReport {
                             reportSummary(report)
+                        }
+
+                        if needsReload && systemStatus.containerRunning {
+                            HStack(spacing: 10) {
+                                Label("配置文件已更新，运行中的 nginx 尚未加载。", systemImage: "arrow.triangle.2.circlepath")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                Button("验证并重载") { Task { await testAndReload() } }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .disabled(isReloading)
+                                if isReloading { ProgressView().scaleEffect(0.6) }
+                            }
+                        }
+
+                        if let reloadResult {
+                            CommandOutputView(
+                                title: reloadResult.exitCode == 0 ? "nginx 已重载" : "nginx 检查或重载失败",
+                                result: reloadResult
+                            )
                         }
                     }
                 } label: {
@@ -90,50 +113,17 @@ struct GenerateView: View {
                             .buttonStyle(.bordered)
                             .disabled(!systemStatus.dockerAvailable)
 
-                            Button("启动") {
-                                Task {
-                                    lifecycleResult = await dockerService.up(
-                                        directory: configService.ensureDeploymentDirectory()
-                                    )
-                                    await systemStatus.refreshDocker(
-                                        mediaServerType: configService.config.mediaServerType,
-                                        force: true
-                                    )
-                                    reevaluate()
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(!systemStatus.dockerAvailable || systemStatus.containerRunning || dockerService.isBusy)
+                            Button("启动") { runLifecycle(.start) }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!systemStatus.dockerAvailable || systemStatus.containerRunning || dockerService.isBusy)
 
-                            Button("重启") {
-                                Task {
-                                    lifecycleResult = await dockerService.restart(
-                                        directory: configService.ensureDeploymentDirectory()
-                                    )
-                                    await systemStatus.refreshDocker(
-                                        mediaServerType: configService.config.mediaServerType,
-                                        force: true
-                                    )
-                                    reevaluate()
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(!systemStatus.dockerAvailable || !systemStatus.containerRunning || dockerService.isBusy)
+                            Button("重启") { runLifecycle(.restart) }
+                                .buttonStyle(.bordered)
+                                .disabled(!systemStatus.dockerAvailable || !systemStatus.containerRunning || dockerService.isBusy)
 
-                            Button("停止") {
-                                Task {
-                                    lifecycleResult = await dockerService.down(
-                                        directory: configService.ensureDeploymentDirectory()
-                                    )
-                                    await systemStatus.refreshDocker(
-                                        mediaServerType: configService.config.mediaServerType,
-                                        force: true
-                                    )
-                                    reevaluate()
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(!systemStatus.dockerAvailable || !systemStatus.containerRunning || dockerService.isBusy)
+                            Button("停止") { runLifecycle(.stop) }
+                                .buttonStyle(.bordered)
+                                .disabled(!systemStatus.dockerAvailable || !systemStatus.containerRunning || dockerService.isBusy)
 
                             if dockerService.isBusy {
                                 ProgressView().scaleEffect(0.7)
@@ -215,6 +205,7 @@ struct GenerateView: View {
         .onChange(of: configService.config.mediaServerType) { _, newType in
             composeResult = nil
             nginxTestResult = nil
+            reloadResult = nil
             containerLogs = ""
             Task {
                 await systemStatus.refreshDocker(mediaServerType: newType, force: true)
@@ -236,10 +227,34 @@ struct GenerateView: View {
             await MainActor.run {
                 lastReport = report
                 isGenerating = false
+                if report.errors.isEmpty { needsReload = true; reloadResult = nil }
                 reevaluate()
             }
             await systemStatus.refreshAll(configService: configService, force: true)
             await MainActor.run { reevaluate() }
+        }
+    }
+
+    private func runLifecycle(_ operation: DockerService.Lifecycle) {
+        Task {
+            let directory = configService.ensureDeploymentDirectory()
+            let result = await dockerService.lifecycle(operation, directory: directory)
+            await MainActor.run {
+                lifecycleResult = result
+                if operation != .stop && result.exitCode == 0 { needsReload = false }
+            }
+            await systemStatus.refreshDocker(mediaServerType: configService.config.mediaServerType, force: true)
+            await MainActor.run { reevaluate() }
+        }
+    }
+
+    private func testAndReload() async {
+        await MainActor.run { isReloading = true }
+        let result = await dockerService.testAndReloadNginx(mediaServerType: configService.config.mediaServerType)
+        await MainActor.run {
+            reloadResult = result
+            if result.exitCode == 0 { needsReload = false }
+            isReloading = false
         }
     }
 

@@ -143,73 +143,18 @@ final class DockerInstallService: @unchecked Sendable {
     }
 
     private func openTerminal(command: String) -> CommandResult {
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "\(appleScriptEscaped(command))"
-        end tell
-        """
-        return runCommand("/usr/bin/osascript", args: ["-e", script])
+        Shell.openInTerminal(command)
     }
 
     private func runCommand(_ command: String, args: [String]) -> CommandResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: command)
-        process.arguments = args
-        process.environment = commandEnvironment()
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            return CommandResult(
-                command: ([command] + args).joined(separator: " "),
-                exitCode: process.terminationStatus,
-                stdout: String(data: outData, encoding: .utf8) ?? "",
-                stderr: String(data: errData, encoding: .utf8) ?? ""
-            )
-        } catch {
-            return CommandResult(
-                command: ([command] + args).joined(separator: " "),
-                exitCode: -1,
-                stdout: "",
-                stderr: error.localizedDescription
-            )
-        }
-    }
-
-    private func commandEnvironment() -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
-        let existingPath = env["PATH"] ?? "/usr/bin:/bin"
-        env["PATH"] = "\(dockerToolPath()):\(existingPath)"
-        return env
+        ProcessRunner.run(command, args: args, timeout: 15)
     }
 
     private func dockerToolPath() -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/opt/homebrew/sbin",
-            "/usr/local/sbin",
-            "\(home)/.orbstack/bin",
-            "\(home)/.docker/bin"
-        ].joined(separator: ":")
+        ProcessRunner.toolPaths().joined(separator: ":")
     }
 
     private func trim(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func appleScriptEscaped(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }

@@ -37,6 +37,9 @@ final class CertificateService: @unchecked Sendable {
         }
     }
 
+    /// 证书剩余天数低于该值时提示“即将到期”（仪表盘与证书页共用）。
+    static let warningDays = 30
+
     private let queue = DispatchQueue(label: "certificate.service")
 
     func updateCertificate(
@@ -80,9 +83,12 @@ final class CertificateService: @unchecked Sendable {
                 "cert-update",
                 "--cert", certificatePath,
                 "--key", privateKeyPath,
-                "--dir", certDirectory,
-                "--pfx-password", pfxPassword,
-                "--key-password", privateKeyPassword
+                "--dir", certDirectory
+            ],
+            // 密码走环境变量，不出现在命令行参数 / 进程列表里
+            environment: [
+                "P2A_PFX_PASSWORD": pfxPassword,
+                "P2A_KEY_PASSWORD": privateKeyPassword
             ]
         )
 
@@ -145,34 +151,7 @@ final class CertificateService: @unchecked Sendable {
     }
 
     private func runCommand(_ command: String, args: [String]) -> CommandResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: command)
-        process.arguments = args
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            return CommandResult(
-                command: ([command] + args).joined(separator: " "),
-                exitCode: process.terminationStatus,
-                stdout: String(data: outData, encoding: .utf8) ?? "",
-                stderr: String(data: errData, encoding: .utf8) ?? ""
-            )
-        } catch {
-            return CommandResult(
-                command: ([command] + args).joined(separator: " "),
-                exitCode: -1,
-                stdout: "",
-                stderr: error.localizedDescription
-            )
-        }
+        ProcessRunner.run(command, args: args, timeout: 15)
     }
 
     private func value(named name: String, in output: String) -> String {
@@ -193,20 +172,5 @@ final class CertificateService: @unchecked Sendable {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "MMM d HH:mm:ss yyyy zzz"
         return formatter.date(from: normalized)
-    }
-
-    private func failure(certDirectory: String, message: String) -> CertificateUpdateReport {
-        CertificateUpdateReport(
-            certDirectory: certDirectory,
-            filesWritten: [],
-            backups: [],
-            certificateInfo: "",
-            commandResult: CommandResult(
-                command: "certificate update",
-                exitCode: -1,
-                stdout: "",
-                stderr: message
-            )
-        )
     }
 }

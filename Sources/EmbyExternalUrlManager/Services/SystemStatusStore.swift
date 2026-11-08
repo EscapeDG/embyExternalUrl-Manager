@@ -47,12 +47,14 @@ final class SystemStatusStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        await DockerService.shared.detect()
-        _ = await DockerService.shared.ps(mediaServerType: mediaServerType)
+        let available = await DockerService.shared.detect()
+        let container = available
+            ? await DockerService.shared.containerState(mediaServerType: mediaServerType)
+            : DockerService.ContainerState(running: false, status: "Docker 未运行")
 
-        dockerAvailable = DockerService.shared.isAvailable
-        containerRunning = DockerService.shared.containerRunning
-        containerStatus = DockerService.shared.containerStatus
+        dockerAvailable = available
+        containerRunning = container.running
+        containerStatus = container.status
         lastRefresh = Date()
     }
 
@@ -92,7 +94,7 @@ final class SystemStatusStore: ObservableObject {
         if inspection.isExpired {
             level = .error
             title = "证书已过期"
-        } else if let days, days <= 14 {
+        } else if let days, days <= CertificateService.warningDays {
             level = .warning
             title = "即将到期（\(days) 天）"
         } else if let days {

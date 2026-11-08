@@ -89,7 +89,7 @@ struct ConnectionView: View {
                                 HStack {
                                     TextField("默认: App Support 下自动创建", text: $configService.config.deploymentDirectory)
                                         .font(.system(.body, design: .monospaced))
-                                    Button("选择") { selectFolder { configService.config.deploymentDirectory = $0 } }
+                                    Button("选择") { FolderPicker.choose { configService.config.deploymentDirectory = $0 } }
                                         .buttonStyle(.bordered)
                                 }
                                 Text("存放 docker-compose.yml 和运行时日志的目录")
@@ -102,7 +102,7 @@ struct ConnectionView: View {
                                 HStack {
                                     TextField("默认: 部署目录下的 nginx/", text: $configService.config.nginxConfigDirectory)
                                         .font(.system(.body, design: .monospaced))
-                                    Button("选择") { selectFolder { configService.config.nginxConfigDirectory = $0 } }
+                                    Button("选择") { FolderPicker.choose { configService.config.nginxConfigDirectory = $0 } }
                                         .buttonStyle(.bordered)
                                     Button("扫描已有配置") { scanExistingConfig() }
                                         .buttonStyle(.borderedProminent)
@@ -158,16 +158,6 @@ struct ConnectionView: View {
                 openListResults = results
                 isTestingOpenList = false
             }
-        }
-    }
-
-    private func selectFolder(_ completion: @escaping (String) -> Void) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            completion(url.path)
         }
     }
 

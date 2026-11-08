@@ -128,6 +128,15 @@ fn parse_options(args: &[String]) -> HashMap<String, String> {
     options
 }
 
+/// 敏感值优先从环境变量读取（不会出现在进程列表里）；兼容旧的命令行参数写法。
+fn option_or_env(options: &HashMap<String, String>, key: &str, env_key: &str) -> String {
+    env::var(env_key)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| get_option(options, key))
+        .unwrap_or_default()
+}
+
 fn get_option(options: &HashMap<String, String>, key: &str) -> Option<String> {
     options.get(key).map(|value| value.trim().to_string())
 }
@@ -186,8 +195,8 @@ fn update_certificate(options: &HashMap<String, String>) -> CertificateReport {
     let cert_path = get_option(options, "cert").unwrap_or_default();
     let key_path = get_option(options, "key").unwrap_or_default();
     let cert_directory = get_option(options, "dir").unwrap_or_default();
-    let pfx_password = get_option(options, "pfx-password").unwrap_or_default();
-    let private_key_password = get_option(options, "key-password").unwrap_or_default();
+    let pfx_password = option_or_env(options, "pfx-password", "P2A_PFX_PASSWORD");
+    let private_key_password = option_or_env(options, "key-password", "P2A_KEY_PASSWORD");
 
     if cert_path.is_empty() {
         return certificate_failure(cert_directory, "缺少证书 PEM 路径");
@@ -272,28 +281,16 @@ fn update_certificate(options: &HashMap<String, String>) -> CertificateReport {
         "-in".to_string(),
         path_string(&cert_pem),
         "-passout".to_string(),
-        format!("pass:{pfx_password}"),
+        "env:P2A_OPENSSL_PFX_PASS".to_string(),
     ];
-    let mut visible_args = vec![
-        "pkcs12".to_string(),
-        "-export".to_string(),
-        "-out".to_string(),
-        path_string(&pfx),
-        "-inkey".to_string(),
-        path_string(&key_pem),
-        "-in".to_string(),
-        path_string(&cert_pem),
-        "-passout".to_string(),
-        "pass:******".to_string(),
-    ];
+    let mut secrets = vec![("P2A_OPENSSL_PFX_PASS", pfx_password.as_str())];
     if !private_key_password.is_empty() {
         openssl_args.push("-passin".to_string());
-        openssl_args.push(format!("pass:{private_key_password}"));
-        visible_args.push("-passin".to_string());
-        visible_args.push("pass:******".to_string());
+        openssl_args.push("env:P2A_OPENSSL_KEY_PASS".to_string());
+        secrets.push(("P2A_OPENSSL_KEY_PASS", private_key_password.as_str()));
     }
 
-    let command_result = run_command("/usr/bin/openssl", &openssl_args, Some(&visible_args));
+    let command_result = run_command_env("/usr/bin/openssl", &openssl_args, None, &secrets);
     if command_result.exit_code == 0 {
         files_written.push(path_string(&pfx));
     }
@@ -328,7 +325,7 @@ fn update_certificate(options: &HashMap<String, String>) -> CertificateReport {
 
 fn refresh_certificate_pfx(options: &HashMap<String, String>) -> CertificateReport {
     let cert_directory = get_option(options, "dir").unwrap_or_default();
-    let pfx_password = get_option(options, "pfx-password").unwrap_or_default();
+    let pfx_password = option_or_env(options, "pfx-password", "P2A_PFX_PASSWORD");
 
     if cert_directory.is_empty() {
         return certificate_failure(cert_directory, "缺少证书目录");
@@ -398,21 +395,14 @@ fn refresh_certificate_pfx(options: &HashMap<String, String>) -> CertificateRepo
         "-in".to_string(),
         path_string(&fullchain_pem),
         "-passout".to_string(),
-        format!("pass:{pfx_password}"),
+        "env:P2A_OPENSSL_PFX_PASS".to_string(),
     ];
-    let visible_args = vec![
-        "pkcs12".to_string(),
-        "-export".to_string(),
-        "-out".to_string(),
-        path_string(&pfx),
-        "-inkey".to_string(),
-        path_string(&key_pem),
-        "-in".to_string(),
-        path_string(&fullchain_pem),
-        "-passout".to_string(),
-        "pass:******".to_string(),
-    ];
-    let command_result = run_command("/usr/bin/openssl", &openssl_args, Some(&visible_args));
+    let command_result = run_command_env(
+        "/usr/bin/openssl",
+        &openssl_args,
+        None,
+        &[("P2A_OPENSSL_PFX_PASS", pfx_password.as_str())],
+    );
     if command_result.exit_code == 0 {
         files_written.push(path_string(&pfx));
     }
@@ -558,6 +548,8 @@ fn sync_upstream(options: &HashMap<String, String>) -> SyncReport {
         }
     }
 
+    prune_oldest(&target_root.join(".manager-backups").join("upstream-sync"), MAX_BACKUPS, |_| true);
+
     if errors.is_empty() {
         if let Some(kind) = &server_type {
             if let Err(error) = fs::write(target_root.join(SKELETON_MARKER), format!("{kind}\n")) {
@@ -633,6 +625,26 @@ fn is_protected(relative_path: &str) -> bool {
         || relative_path.starts_with("conf.d/cert/")
         || (relative_path.starts_with("conf.d/includes/") && relative_path.ends_with(".conf"))
         || (relative_path.starts_with("conf.d/config/constant") && relative_path.ends_with(".js"))
+}
+
+/// 每个文件 / 每次同步最多保留的备份数量。
+const MAX_BACKUPS: usize = 5;
+
+/// 只保留 `dir` 下排序最靠后（最新）的 `keep` 个条目；时间戳在名称里，按名称排序即按时间。
+fn prune_oldest(dir: &Path, keep: usize, matches: impl Fn(&str) -> bool) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| matches(name))
+        .collect();
+    names.sort();
+    if names.len() > keep {
+        for name in &names[..names.len() - keep] {
+            let path = dir.join(name);
+            let _ = if path.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
+        }
+    }
 }
 
 const SKELETON_MARKER: &str = ".manager-skeleton-type";
@@ -715,6 +727,8 @@ fn backup_existing_file(path: &Path) -> io::Result<PathBuf> {
         .unwrap_or_else(|| "backup".to_string());
     let backup = parent.join(format!("{file_name}.{}.bak", timestamp()));
     fs::copy(path, &backup)?;
+    let prefix = format!("{file_name}.");
+    prune_oldest(parent, MAX_BACKUPS, |name| name.starts_with(&prefix) && name.ends_with(".bak"));
     Ok(backup)
 }
 
@@ -737,7 +751,16 @@ fn files_equal(left: &Path, right: &Path) -> io::Result<bool> {
 }
 
 fn run_command(program: &str, args: &[String], visible_args: Option<&[String]>) -> CommandResult {
-    let output = Command::new(program).args(args).output();
+    run_command_env(program, args, visible_args, &[])
+}
+
+fn run_command_env(
+    program: &str,
+    args: &[String],
+    visible_args: Option<&[String]>,
+    envs: &[(&str, &str)],
+) -> CommandResult {
+    let output = Command::new(program).args(args).envs(envs.iter().copied()).output();
     let display_args = visible_args.unwrap_or(args);
     match output {
         Ok(output) => CommandResult {
@@ -787,7 +810,7 @@ fn timestamp() -> String {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    format!("{}-{:09}", duration.as_secs(), duration.subsec_nanos())
+    format!("{:012}-{:09}", duration.as_secs(), duration.subsec_nanos())
 }
 
 fn path_string(path: &Path) -> String {
@@ -919,6 +942,48 @@ mod tests {
         assert!(report.protected_files.contains(&"conf.d/config/constant-common.js".to_string()));
         assert_eq!(fs::read_to_string(target.join("conf.d/config/constant-common.js")).unwrap(), "user-edit");
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backups_are_pruned_to_the_newest_few() {
+        let dir = std::env::temp_dir().join(format!("p2a-prune-{}", timestamp()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cert.pem");
+        fs::write(&file, "x").unwrap();
+        for _ in 0..(MAX_BACKUPS + 4) {
+            backup_existing_file(&file).unwrap();
+        }
+        let count = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".bak"))
+            .count();
+        assert_eq!(count, MAX_BACKUPS);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pfx_password_is_not_exposed_in_command_line() {
+        let dir = std::env::temp_dir().join(format!("p2a-pfx-{}", timestamp()));
+        fs::create_dir_all(&dir).unwrap();
+        let (cert, key) = (dir.join("c.pem"), dir.join("k.pem"));
+        let gen = Command::new("/usr/bin/openssl")
+            .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=t"])
+            .args(["-keyout", &path_string(&key), "-out", &path_string(&cert)])
+            .output();
+        if gen.map(|o| o.status.success()).unwrap_or(false) {
+            let mut options = HashMap::new();
+            options.insert("cert".to_string(), path_string(&cert));
+            options.insert("key".to_string(), path_string(&key));
+            options.insert("dir".to_string(), path_string(&dir.join("out")));
+            env::set_var("P2A_PFX_PASSWORD", "s3cret-pass");
+            let report = update_certificate(&options);
+            env::remove_var("P2A_PFX_PASSWORD");
+            assert_eq!(report.command_result.exit_code, 0, "{}", report.command_result.stderr);
+            assert!(!report.command_result.command.contains("s3cret-pass"));
+            assert!(dir.join("out/certificate.pfx").is_file());
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

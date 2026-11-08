@@ -57,6 +57,18 @@ struct EmbyJellyfinSettings: Codable, Equatable {
 
     init() {}
 
+    init(serverURL: String, proxyPort: Int, proxyHttpsPort: Int) {
+        self.serverURL = serverURL
+        self.proxyPort = proxyPort
+        self.proxyHttpsPort = proxyHttpsPort
+    }
+
+    /// Jellyfin 默认值：自身服务端口 8096 / 8920 已被占用，反代端口需错开；
+    /// 也与 Emby(8091/8095)、Plex(8098/8099) 区分开，三者可同时部署。
+    static let jellyfinDefault = EmbyJellyfinSettings(
+        serverURL: "http://127.0.0.1:8096", proxyPort: 8092, proxyHttpsPort: 8097
+    )
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         serverURL = try container.decodeIfPresent(String.self, forKey: .serverURL) ?? "http://127.0.0.1:8096"
@@ -75,12 +87,14 @@ struct AppConfig: Codable, Equatable {
 
     var mediaServerType: MediaServerType = .plex
     var emby: EmbyJellyfinSettings = .init()
-    var jellyfin: EmbyJellyfinSettings = .init()
+    var jellyfin: EmbyJellyfinSettings = .jellyfinDefault
 
     // Deployment paths
     var deploymentDirectory: String = ""
     var nginxConfigDirectory: String = ""
     var upstreamRepoDirectory: String = ""
+    /// 「在线一键同步」使用的上游缓存目录（与本地上游目录分开记录）。
+    var upstreamOnlineCacheDirectory: String = ""
     var certificateDirectory: String?
     var certificateDomains: String = ""
     var certificateEmail: String = ""
@@ -102,6 +116,7 @@ struct AppConfig: Codable, Equatable {
         case deploymentDirectory
         case nginxConfigDirectory
         case upstreamRepoDirectory
+        case upstreamOnlineCacheDirectory
         case certificateDirectory
         case certificateDomains
         case certificateEmail
@@ -123,11 +138,12 @@ struct AppConfig: Codable, Equatable {
         pathMappings = try container.decodeIfPresent([PathMapping].self, forKey: .pathMappings) ?? []
         mediaServerType = try container.decodeIfPresent(MediaServerType.self, forKey: .mediaServerType) ?? .plex
         emby = try container.decodeIfPresent(EmbyJellyfinSettings.self, forKey: .emby) ?? EmbyJellyfinSettings()
-        jellyfin = try container.decodeIfPresent(EmbyJellyfinSettings.self, forKey: .jellyfin) ?? EmbyJellyfinSettings()
+        jellyfin = try container.decodeIfPresent(EmbyJellyfinSettings.self, forKey: .jellyfin) ?? .jellyfinDefault
 
         deploymentDirectory = try container.decodeIfPresent(String.self, forKey: .deploymentDirectory) ?? ""
         nginxConfigDirectory = try container.decodeIfPresent(String.self, forKey: .nginxConfigDirectory) ?? ""
         upstreamRepoDirectory = try container.decodeIfPresent(String.self, forKey: .upstreamRepoDirectory) ?? ""
+        upstreamOnlineCacheDirectory = try container.decodeIfPresent(String.self, forKey: .upstreamOnlineCacheDirectory) ?? ""
         certificateDirectory = try container.decodeIfPresent(String.self, forKey: .certificateDirectory)
         certificateDomains = try container.decodeIfPresent(String.self, forKey: .certificateDomains) ?? ""
         certificateEmail = try container.decodeIfPresent(String.self, forKey: .certificateEmail) ?? ""
@@ -144,7 +160,7 @@ struct AppConfig: Codable, Equatable {
 struct PlexSettings: Codable, Equatable {
     var serverURL: String = "http://127.0.0.1:32400"
     var proxyPort: Int = 8098
-    var proxyHttpsPort: Int = 8095
+    var proxyHttpsPort: Int = 8099
 
     enum CodingKeys: String, CodingKey {
         case serverURL
@@ -158,7 +174,7 @@ struct PlexSettings: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         serverURL = try container.decodeIfPresent(String.self, forKey: .serverURL) ?? "http://127.0.0.1:32400"
         proxyPort = try container.decodeIfPresent(Int.self, forKey: .proxyPort) ?? 8098
-        proxyHttpsPort = try container.decodeIfPresent(Int.self, forKey: .proxyHttpsPort) ?? 8095
+        proxyHttpsPort = try container.decodeIfPresent(Int.self, forKey: .proxyHttpsPort) ?? 8099
     }
 }
 

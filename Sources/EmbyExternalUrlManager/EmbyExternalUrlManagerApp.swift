@@ -53,11 +53,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var menu: NSMenu?
     private var updateTimer: Timer?
 
-    // Local cached statuses
-    private var dockerAvailable = false
-    private var containerRunning = false
-    private var containerStatus = ""
-
     // Menu item references
     private var statusHeaderItem: NSMenuItem?
     private var serverTypeItem: NSMenuItem?
@@ -183,16 +178,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refreshStatus() async {
         let mediaServerType = ConfigService.shared.config.mediaServerType
         await SystemStatusStore.shared.refreshDocker(mediaServerType: mediaServerType, force: true)
-
-        await MainActor.run {
-            self.dockerAvailable = SystemStatusStore.shared.dockerAvailable
-            self.containerRunning = SystemStatusStore.shared.containerRunning
-            self.containerStatus = SystemStatusStore.shared.containerStatus
-            self.updateMenuState()
-        }
+        await MainActor.run { self.updateMenuState() }
     }
 
+    @MainActor
     private func updateMenuState() {
+        let dockerAvailable = SystemStatusStore.shared.dockerAvailable
+        let containerRunning = SystemStatusStore.shared.containerRunning
+        let containerStatus = SystemStatusStore.shared.containerStatus
+
         // Update Server Type
         let mediaType = ConfigService.shared.config.mediaServerType
         let serverTypeName = mediaType == .plex ? "Plex" : (mediaType == .emby ? "Emby" : "Jellyfin")
@@ -246,71 +240,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Actions
 
     @objc private func showMainWindow() {
-        // Defer until status-bar menu tracking ends, then prefer SwiftUI openWindow.
+        // 等状态栏菜单收起后再处理；已有主窗口就直接前置，不重复创建。
         DispatchQueue.main.async {
             NSApp.activate(ignoringOtherApps: true)
-            if let open = Self.openWindowAction {
-                open()
-            }
-            // Fallback: front any titled keyable window (no className heuristics).
             if let window = NSApp.windows.first(where: { $0.canBecomeKey && $0.styleMask.contains(.titled) }) {
-                if window.isMiniaturized {
-                    window.deminiaturize(nil)
-                }
+                if window.isMiniaturized { window.deminiaturize(nil) }
                 window.makeKeyAndOrderFront(nil)
+            } else {
+                Self.openWindowAction?()
             }
         }
     }
 
-    @objc private func startContainer() {
-        if DockerService.shared.isBusy {
-            alert(message: "已有容器操作进行中，请稍候。")
-            return
-        }
-        let deployDir = ConfigService.shared.ensureDeploymentDirectory()
-        guard FileManager.default.fileExists(atPath: "\(deployDir)/docker-compose.yml") else {
-            alert(message: "请先在主界面生成部署配置。")
-            return
-        }
-        Task {
-            let result = await DockerService.shared.up(directory: deployDir)
-            if result.exitCode != 0 {
-                await MainActor.run {
-                    alert(message: "启动失败:\n\(result.stderr.isEmpty ? result.stdout : result.stderr)")
-                }
-            }
-            await refreshStatus()
-        }
-    }
+    @objc private func startContainer() { runLifecycle(.start) }
+    @objc private func stopContainer() { runLifecycle(.stop) }
+    @objc private func restartContainer() { runLifecycle(.restart) }
 
-    @objc private func stopContainer() {
-        if DockerService.shared.isBusy {
-            alert(message: "已有容器操作进行中，请稍候。")
-            return
-        }
-        let deployDir = ConfigService.shared.ensureDeploymentDirectory()
+    private func runLifecycle(_ operation: DockerService.Lifecycle) {
         Task {
-            let result = await DockerService.shared.down(directory: deployDir)
+            let directory = await MainActor.run { ConfigService.shared.deploymentDirectoryPath() }
+            let result = await DockerService.shared.lifecycle(operation, directory: directory)
             if result.exitCode != 0 {
                 await MainActor.run {
-                    alert(message: "停止失败:\n\(result.stderr.isEmpty ? result.stdout : result.stderr)")
-                }
-            }
-            await refreshStatus()
-        }
-    }
-
-    @objc private func restartContainer() {
-        if DockerService.shared.isBusy {
-            alert(message: "已有容器操作进行中，请稍候。")
-            return
-        }
-        let deployDir = ConfigService.shared.ensureDeploymentDirectory()
-        Task {
-            let result = await DockerService.shared.restart(directory: deployDir)
-            if result.exitCode != 0 {
-                await MainActor.run {
-                    alert(message: "重启失败:\n\(result.stderr.isEmpty ? result.stdout : result.stderr)")
+                    alert(message: "\(operation.title)失败:\n\(result.stderr.isEmpty ? result.stdout : result.stderr)")
                 }
             }
             await refreshStatus()
@@ -319,10 +271,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func reloadNginx() {
         Task {
-            let result = await DockerService.shared.reloadNginx(mediaServerType: ConfigService.shared.config.mediaServerType)
+            let type = await MainActor.run { ConfigService.shared.config.mediaServerType }
+            let result = await DockerService.shared.testAndReloadNginx(mediaServerType: type)
             if result.exitCode != 0 {
                 await MainActor.run {
-                    alert(message: "Nginx 重载失败:\n\(result.stderr)")
+                    alert(message: "Nginx 配置检查或重载失败:\n\(result.stderr.isEmpty ? result.stdout : result.stderr)")
                 }
             } else {
                 await refreshStatus()

@@ -186,7 +186,7 @@ struct CertificateView: View {
                 HStack {
                     TextField(defaultCertDirectory, text: $certDirectory)
                         .font(.system(.body, design: .monospaced))
-                    Button("选择目录") { selectFolder { certDirectory = $0 } }
+                    Button("选择目录") { FolderPicker.choose { certDirectory = $0 } }
                         .buttonStyle(.bordered)
                     Button { NSWorkspace.shared.open(URL(fileURLWithPath: effectiveCertDirectory)) } label: {
                         Image(systemName: "folder")
@@ -263,10 +263,15 @@ struct CertificateView: View {
 
             if acmeMode == .webroot {
                 FormField(label: "Webroot") {
-                    directoryRow(
-                        placeholder: CertificateAutomationService.shared.defaultWebrootDirectory(
-                            deploymentDirectory: configService.ensureDeploymentDirectory()),
-                        text: $acmeWebrootPath, buttonTitle: "选择目录")
+                    VStack(alignment: .leading, spacing: 4) {
+                        directoryRow(
+                            placeholder: CertificateAutomationService.shared.defaultWebrootDirectory(
+                                deploymentDirectory: configService.deploymentDirectoryPath()),
+                            text: $acmeWebrootPath, buttonTitle: "选择目录")
+                        Text("留空使用部署目录下的 acme-webroot：已挂载进容器，并由「生成配置」写入 /.well-known/acme-challenge/ 路径。自定义目录需自行挂载并配置 nginx。验证请求须能通过 80 端口访问到该 nginx。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
@@ -335,14 +340,14 @@ struct CertificateView: View {
             return "exclamationmark.triangle.fill"
         }
         if inspection.isExpired { return "xmark.octagon.fill" }
-        if let days = inspection.daysRemaining, days <= 30 { return "exclamationmark.triangle.fill" }
+        if let days = inspection.daysRemaining, days <= CertificateService.warningDays { return "exclamationmark.triangle.fill" }
         return "checkmark.circle.fill"
     }
 
     private var statusColor: Color {
         guard let inspection = certificateInspection, inspection.commandResult.exitCode == 0 else { return .orange }
         if inspection.isExpired { return .red }
-        if let days = inspection.daysRemaining, days <= 30 { return .orange }
+        if let days = inspection.daysRemaining, days <= CertificateService.warningDays { return .orange }
         return .green
     }
 
@@ -350,8 +355,9 @@ struct CertificateView: View {
         isUpdating = true; reloadResult = nil
         let targetDirectory = effectiveCertDirectory
         await MainActor.run {
-            configService.config.certificateDirectory = configService.normalizedCertificateDirectory(targetDirectory)
-            persistenceWarning = configService.save() ? nil : (configService.lastPersistenceError ?? "保存证书目录失败。")
+            let normalized = configService.normalizedCertificateDirectory(targetDirectory)
+            persistenceWarning = configService.persistPartial { $0.certificateDirectory = normalized }
+                ? nil : (configService.lastPersistenceError ?? "保存证书目录失败。")
         }
         let updateReport = await CertificateService.shared.updateCertificate(
             certificatePath: certificatePath, privateKeyPath: privateKeyPath,
@@ -409,15 +415,21 @@ struct CertificateView: View {
     }
 
     private func saveAcmeConfig() {
-        configService.config.certificateDirectory = configService.normalizedCertificateDirectory(effectiveCertDirectory)
-        configService.config.certificateDomains = acmeDomains
-        configService.config.certificateEmail = acmeEmail
-        configService.config.certificateIssueMode = acmeMode.rawValue
-        configService.config.certificateWebrootPath = acmeWebrootPath
-        configService.config.certificateCustomIssueArguments = acmeCustomArguments
-        configService.config.certificatePreflightShell = acmePreflightShell
-        configService.config.certificateReloadAfterRenew = reloadAfterRenew
-        persistenceWarning = configService.save() ? nil : (configService.lastPersistenceError ?? "保存 ACME 配置失败。")
+        let directory = configService.normalizedCertificateDirectory(effectiveCertDirectory)
+        let domains = acmeDomains, email = acmeEmail, mode = acmeMode.rawValue
+        let webroot = acmeWebrootPath, custom = acmeCustomArguments
+        let preflight = acmePreflightShell, reload = reloadAfterRenew
+        // 只写入证书相关字段，不连带保存其它页面尚未保存的修改
+        persistenceWarning = configService.persistPartial { cfg in
+            cfg.certificateDirectory = directory
+            cfg.certificateDomains = domains
+            cfg.certificateEmail = email
+            cfg.certificateIssueMode = mode
+            cfg.certificateWebrootPath = webroot
+            cfg.certificateCustomIssueArguments = custom
+            cfg.certificatePreflightShell = preflight
+            cfg.certificateReloadAfterRenew = reload
+        } ? nil : (configService.lastPersistenceError ?? "保存 ACME 配置失败。")
     }
 
     private func reportContent(_ report: CertificateService.CertificateUpdateReport) -> some View {
@@ -458,7 +470,7 @@ struct CertificateView: View {
     private func directoryRow(placeholder: String, text: Binding<String>, buttonTitle: String) -> some View {
         HStack {
             TextField(placeholder, text: text).font(.system(.body, design: .monospaced))
-            Button(buttonTitle) { selectFolder { text.wrappedValue = $0 } }.buttonStyle(.bordered)
+            Button(buttonTitle) { FolderPicker.choose { text.wrappedValue = $0 } }.buttonStyle(.bordered)
             Button { NSWorkspace.shared.open(URL(fileURLWithPath: text.wrappedValue.isEmpty ? placeholder : text.wrappedValue)) } label: {
                 Image(systemName: "folder")
             }.buttonStyle(.bordered).help("打开目录")
@@ -478,9 +490,4 @@ struct CertificateView: View {
         if panel.runModal() == .OK, let url = panel.url { completion(url.path) }
     }
 
-    private func selectFolder(_ completion: @escaping (String) -> Void) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url { completion(url.path) }
-    }
 }

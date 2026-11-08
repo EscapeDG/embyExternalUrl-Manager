@@ -28,7 +28,7 @@ enum DeploymentPipeline {
     ) -> [PipelineStep] {
         let config = configService.config
         let fm = FileManager.default
-        let deployDir = configService.ensureDeploymentDirectory()
+        let deployDir = configService.deploymentDirectoryPath()
         let nginxDir = configService.nginxConfigDirectory()
         let confDir = nginxDir + "/conf.d"
         let activeConf = confDir + "/" + config.mediaServerType.nginxConfName

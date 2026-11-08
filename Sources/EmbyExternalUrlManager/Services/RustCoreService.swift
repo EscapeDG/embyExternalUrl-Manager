@@ -10,7 +10,9 @@ final class RustCoreService: @unchecked Sendable {
         case failure(CommandResult)
     }
 
-    func run(arguments: [String]) -> CommandResult {
+    /// 执行 Rust core。`environment` 用于传递敏感值（密码等），避免出现在命令行参数里。
+    /// 默认关闭 git 的交互式凭据提示，并带超时，避免 clone / pull 卡死界面。
+    func run(arguments: [String], timeout: TimeInterval = 60, environment: [String: String] = [:]) -> CommandResult {
         guard let executableURL = executableURL() else {
             return CommandResult(
                 command: maskedCommand(arguments: arguments),
@@ -19,46 +21,24 @@ final class RustCoreService: @unchecked Sendable {
                 stderr: "未找到 Rust core 可执行文件 plex2alist-core。请重新构建或重新安装应用。"
             )
         }
-
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = arguments
-
-        let existingPath = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
-        let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/sbin", "/usr/local/sbin"]
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = (extraPaths + [existingPath]).joined(separator: ":")
-        process.environment = environment
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            return CommandResult(
-                command: maskedCommand(executablePath: executableURL.path, arguments: arguments),
-                exitCode: process.terminationStatus,
-                stdout: String(data: outData, encoding: .utf8) ?? "",
-                stderr: String(data: errData, encoding: .utf8) ?? ""
-            )
-        } catch {
-            return CommandResult(
-                command: maskedCommand(executablePath: executableURL.path, arguments: arguments),
-                exitCode: -1,
-                stdout: "",
-                stderr: error.localizedDescription
-            )
-        }
+        var extra = ["GIT_TERMINAL_PROMPT": "0"]
+        for (key, value) in environment { extra[key] = value }
+        return ProcessRunner.run(
+            executableURL.path,
+            args: arguments,
+            timeout: timeout,
+            environment: ProcessRunner.environment(extra: extra),
+            displayArguments: masked(arguments: arguments)
+        )
     }
 
-    func decode<T: Decodable>(_ type: T.Type, arguments: [String]) -> DecodeResult<T> {
-        let result = run(arguments: arguments)
+    func decode<T: Decodable>(
+        _ type: T.Type,
+        arguments: [String],
+        timeout: TimeInterval = 60,
+        environment: [String: String] = [:]
+    ) -> DecodeResult<T> {
+        let result = run(arguments: arguments, timeout: timeout, environment: environment)
         guard let data = result.stdout.data(using: .utf8), !data.isEmpty else {
             return .failure(result)
         }

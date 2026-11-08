@@ -176,7 +176,7 @@ final class CertificateAutomationService: @unchecked Sendable {
         if [ ! -x "$CORE" ]; then
           CORE="plex2alist-core"
         fi
-        "$CORE" cert-refresh-pfx --dir \(shellQuote(request.certDirectory)) --pfx-password \(shellQuote(request.pfxPassword))
+        P2A_PFX_PASSWORD=\(shellQuote(request.pfxPassword)) "$CORE" cert-refresh-pfx --dir \(shellQuote(request.certDirectory))
         \(reload)
         """
         try content.write(to: hook, atomically: true, encoding: .utf8)
@@ -192,13 +192,7 @@ final class CertificateAutomationService: @unchecked Sendable {
     }
 
     private func openTerminal(command: String) -> CommandResult {
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "\(appleScriptEscaped(command))"
-        end tell
-        """
-        return runCommand("/usr/bin/osascript", args: ["-e", script])
+        Shell.openInTerminal(command)
     }
 
     private func acmePath() -> String {
@@ -216,45 +210,7 @@ final class CertificateAutomationService: @unchecked Sendable {
     }
 
     private func runCommand(_ command: String, args: [String]) -> CommandResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: command)
-        process.arguments = args
-
-        var env = ProcessInfo.processInfo.environment
-        let existingPath = env["PATH"] ?? "/usr/bin:/bin"
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        env["PATH"] = [
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "\(home)/.acme.sh",
-            existingPath
-        ].joined(separator: ":")
-        process.environment = env
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            return CommandResult(
-                command: ([command] + args).joined(separator: " "),
-                exitCode: process.terminationStatus,
-                stdout: String(data: outData, encoding: .utf8) ?? "",
-                stderr: String(data: errData, encoding: .utf8) ?? ""
-            )
-        } catch {
-            return CommandResult(
-                command: ([command] + args).joined(separator: " "),
-                exitCode: -1,
-                stdout: "",
-                stderr: error.localizedDescription
-            )
-        }
+        ProcessRunner.run(command, args: args, timeout: 20)
     }
 
     private func parsedDomains(_ value: String) -> [String] {
@@ -265,16 +221,10 @@ final class CertificateAutomationService: @unchecked Sendable {
     }
 
     private func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+        Shell.quote(value)
     }
 
     private func trim(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func appleScriptEscaped(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }
