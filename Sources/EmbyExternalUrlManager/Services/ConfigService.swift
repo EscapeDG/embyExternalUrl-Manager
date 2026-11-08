@@ -331,32 +331,37 @@ final class ConfigService: ObservableObject {
             ("https.conf", "https.conf", URL(fileURLWithPath: nginxIncludesDir).appendingPathComponent("https.conf"), false),
         ]
 
-        // ACME webroot 验证：nginx 把 /.well-known/acme-challenge/ 指向挂载进容器的 acme-webroot
-        try? FileManager.default.createDirectory(
-            at: URL(fileURLWithPath: nginxConfDir + "/custome/location"), withIntermediateDirectories: true
-        )
-        templates.append((
-            "acme-challenge.conf", "acme-challenge.conf",
-            URL(fileURLWithPath: nginxConfDir + "/custome/location/acme-challenge.conf"), false
-        ))
-
+        // 已有 compose 只做检查，不覆盖（可能是用户手工维护的）。
+        var includeAcmeConf = true
         if let existingCompose = try? String(contentsOf: composeURL, encoding: .utf8) {
-            if Self.composeMatches(
+            let problems = Self.composeMismatches(
                 existingCompose,
-                container: config.mediaServerType.containerName,
+                containerCandidates: config.mediaServerType.containerCandidates,
                 nginxDir: nginxDir,
-                deployDir: deployDir
-            ) {
-                // 容器名与挂载路径一致：保留用户对 compose 的其它自定义
-                if !existingCompose.contains("/usr/share/nginx/acme-webroot") {
-                    warnings.append("docker-compose.yml 没有 acme-webroot 挂载；要使用 Webroot 方式签发证书，请删除该文件后重新生成（旧文件会先备份）。")
-                }
-            } else {
-                templates.append(("docker-compose.yml", "docker-compose.yml", composeURL, false))
-                warnings.append("docker-compose.yml 的容器名或挂载路径与当前设置不一致，已备份旧文件并重新生成；运行中的容器需在「容器管理」重新启动才会应用。")
+                composeDir: deployDir
+            )
+            let hasWebroot = existingCompose.contains("/usr/share/nginx/acme-webroot")
+            includeAcmeConf = hasWebroot
+            if !problems.isEmpty {
+                let generatedURL = URL(fileURLWithPath: deployDir).appendingPathComponent("docker-compose.generated.yml")
+                templates.append(("docker-compose.generated.yml", "docker-compose.yml", generatedURL, false))
+                warnings.append("现有 docker-compose.yml 与当前设置不一致（\(problems.joined(separator: "；"))）。未改动该文件，按当前设置生成的版本已写到 docker-compose.generated.yml，请自行对比后决定是否采用。")
+            } else if !hasWebroot {
+                notes.append("docker-compose.yml 没有 acme-webroot 挂载，未写入 acme-challenge.conf；如需 Webroot 方式签发证书，请在 compose 中加入 \(deployDir)/acme-webroot:/usr/share/nginx/acme-webroot:ro。")
             }
         } else {
             templates.append(("docker-compose.yml", "docker-compose.yml", composeURL, false))
+        }
+
+        if includeAcmeConf {
+            // ACME webroot 验证：nginx 把 /.well-known/acme-challenge/ 指向挂载进容器的 acme-webroot
+            try? FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: nginxConfDir + "/custome/location"), withIntermediateDirectories: true
+            )
+            templates.append((
+                "acme-challenge.conf", "acme-challenge.conf",
+                URL(fileURLWithPath: nginxConfDir + "/custome/location/acme-challenge.conf"), false
+            ))
         }
 
         if config.mediaServerType != .plex {
@@ -396,6 +401,9 @@ final class ConfigService: ObservableObject {
                 finalContent = merged.content
                 if !merged.preserved.isEmpty {
                     notes.append("\(name)：保留了 \(merged.preserved.joined(separator: "、"))")
+                }
+                for change in merged.enableChanges {
+                    warnings.append("\(name)：\(change)（以 Manager 里的开关为准；如不想改变，请在 Manager 对应页面修改开关后重新生成）")
                 }
             }
 
@@ -505,16 +513,49 @@ final class ConfigService: ObservableObject {
         return nil
     }
 
-    /// compose 中的容器名与四个挂载源是否仍与当前设置一致（忽略引号差异）。
-    static func composeMatches(_ text: String, container: String, nginxDir: String, deployDir: String) -> Bool {
-        let flat = text.replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: "'", with: "")
-        return [
-            "container_name: \(container)",
-            "\(nginxDir)/nginx.conf:/etc/nginx/nginx.conf",
-            "\(nginxDir)/conf.d:/etc/nginx/conf.d",
-            "\(deployDir)/logs:/var/log/nginx",
-            "\(deployDir)/cache:/var/cache/nginx"
-        ].allSatisfy { flat.contains($0) }
+    /// 检查现有 compose 是否仍能加载当前 nginx 配置；返回不一致的项（空 = 一致）。
+    /// 容器名接受该媒体类型的任一已知名称；挂载源支持相对路径（相对 compose 所在目录）。
+    /// 日志 / 缓存目录属于用户布局，不检查。
+    static func composeMismatches(
+        _ text: String, containerCandidates: [String], nginxDir: String, composeDir: String
+    ) -> [String] {
+        var problems: [String] = []
+        let lines = text.components(separatedBy: "\n").map {
+            $0.trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: "\"", with: "").replacingOccurrences(of: "'", with: "")
+        }
+
+        let names = lines.compactMap { line -> String? in
+            guard line.hasPrefix("container_name:") else { return nil }
+            return line.dropFirst("container_name:".count).trimmingCharacters(in: .whitespaces)
+        }
+        if !names.contains(where: { containerCandidates.contains($0) }) {
+            problems.append("容器名为 \(names.first ?? "未设置")，期望 \(containerCandidates.joined(separator: " / "))")
+        }
+
+        func sources(forTarget target: String) -> [String] {
+            lines.compactMap { line -> String? in
+                var item = line
+                if item.hasPrefix("- ") { item = String(item.dropFirst(2)) }
+                let parts = item.components(separatedBy: ":")
+                guard parts.count >= 2, parts[1] == target else { return nil }
+                return parts[0]
+            }
+        }
+        func resolve(_ source: String) -> String {
+            let expanded = (source as NSString).expandingTildeInPath
+            let full = expanded.hasPrefix("/") ? expanded : composeDir + "/" + expanded
+            return URL(fileURLWithPath: full).standardizedFileURL.path
+        }
+        let wantedDir = URL(fileURLWithPath: nginxDir).standardizedFileURL.path
+        for (target, expected) in [("/etc/nginx/nginx.conf", wantedDir + "/nginx.conf"),
+                                   ("/etc/nginx/conf.d", wantedDir + "/conf.d")] {
+            let resolved = sources(forTarget: target).map(resolve)
+            if !resolved.contains(expected) {
+                problems.append("\(target) 的挂载源为 \(resolved.first ?? "未挂载")，期望 \(expected)")
+            }
+        }
+        return problems
     }
 
     private static var templatesBundle: Bundle {

@@ -227,10 +227,11 @@ enum ConfigPreserver {
         rendered: String,
         existing: String,
         templateName: String
-    ) -> (content: String, preserved: [String]) {
-        guard let rule = rules[templateName] else { return (rendered, []) }
+    ) -> (content: String, preserved: [String], enableChanges: [String]) {
+        guard let rule = rules[templateName] else { return (rendered, [], []) }
         var content = rendered
         var preserved: [String] = []
+        var enableChanges: [String] = []
 
         for name in rule.keep {
             guard let old = JSStatementScanner.statement(named: name, in: existing),
@@ -247,13 +248,16 @@ enum ConfigPreserver {
                   let range = JSStatementScanner.statementRange(named: name, in: content),
                   let newValue = enableValue(in: String(content[range])),
                   let patched = replacingEnable(in: old, with: newValue) else { continue }
+            if let oldValue = enableValue(in: old), oldValue != newValue {
+                enableChanges.append("\(name) 的 enable 由 \(oldValue) 改为 \(newValue)")
+            }
             if content[range] != patched {
                 let customized = normalized(String(content[range])) != normalized(patched)
                 content.replaceSubrange(range, with: patched)
                 if customized { preserved.append(name) }
             }
         }
-        return (content, preserved)
+        return (content, preserved, enableChanges)
     }
 
     /// `mediaPathMapping` 中 Manager 只拥有 `[0, 0, "本地", "远端"]` 形式的条目；

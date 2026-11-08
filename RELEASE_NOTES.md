@@ -1,5 +1,19 @@
 # embyExternalUrl-Manager Release Notes
 
+## 1.1.2 (112)
+
+### 修复（1.1.1 的回归，请升级）
+
+- **不再覆盖已有的 `docker-compose.yml`**：1.1.1 会把容器名（如 `nginx-plex`）或相对路径挂载不符合其预期的手写 compose 当成"不一致"并重写。现在已有 compose 一律不改动；容器名接受 `plex2Alist-nginx` / `nginx-plex`（Emby、Jellyfin 同理），挂载源支持相对路径，日志与缓存目录不检查。
+- 只有 `nginx.conf` / `conf.d` 的挂载源确实指向别处时才提示，并把按当前设置生成的版本写到 `docker-compose.generated.yml`，由用户自行对比。
+- **开关被改写时提示**：生成时若 Manager 里的开关值会改变现有文件中的 `enable`（如转码 `false → true`），生成页会列出变化。
+- compose 没有 `acme-webroot` 挂载时，不再写入无用的 `acme-challenge.conf`。
+
+### 限制
+
+- 仍为 ad-hoc 签名，未公证。
+- 「容器日志」读取 `docker logs`；nginx 日志写入挂载文件的部署里，该视图可能为空（后续版本改进）。
+
 ## 1.1.1 (111)
 
 ### 修复（架构核查后）
