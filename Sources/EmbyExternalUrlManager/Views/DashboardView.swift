@@ -262,29 +262,9 @@ struct DashboardView: View {
 
     // MARK: - Helpers
 
-    private var serverAddress: String {
-        switch configService.config.mediaServerType {
-        case .plex: return configService.config.plex.serverURL
-        case .emby: return configService.config.emby.serverURL
-        case .jellyfin: return configService.config.jellyfin.serverURL
-        }
-    }
-
-    private var httpPort: Int {
-        switch configService.config.mediaServerType {
-        case .plex: return configService.config.plex.proxyPort
-        case .emby: return configService.config.emby.proxyPort
-        case .jellyfin: return configService.config.jellyfin.proxyPort
-        }
-    }
-
-    private var httpsPort: Int {
-        switch configService.config.mediaServerType {
-        case .plex: return configService.config.plex.proxyHttpsPort
-        case .emby: return configService.config.emby.proxyHttpsPort
-        case .jellyfin: return configService.config.jellyfin.proxyHttpsPort
-        }
-    }
+    private var serverAddress: String { configService.config.activeServerURL }
+    private var httpPort: Int { configService.config.activeProxyPort }
+    private var httpsPort: Int { configService.config.activeProxyHttpsPort }
 
     private var certificateDir: String {
         configService.effectiveCertificateDirectory()
@@ -304,23 +284,15 @@ struct DashboardView: View {
         isDiagnosing = true
         lastDiagnostics = []
 
+        // 媒体服务器、OpenList 与 Docker 状态刷新互不依赖，并发执行；结果仍按固定顺序排列。
+        let snapshot = configService.config
+        async let mediaResults = Self.mediaServerChecks(snapshot)
+        async let openListResults = OpenListService.shared.runAllTests(config: snapshot)
         await systemStatus.refreshAll(configService: configService, force: true)
         reevaluate()
 
-        var results: [DiagnosticResult] = []
-
-        let snapshot = configService.config
-        switch snapshot.mediaServerType {
-        case .plex:
-            results.append(await PlexService.shared.ping(serverURL: snapshot.plex.serverURL))
-        case .emby:
-            results.append(await EmbyJellyfinService.shared.ping(serverURL: snapshot.emby.serverURL, serverType: .emby))
-            results.append(await EmbyJellyfinService.shared.testAPIKey(serverURL: snapshot.emby.serverURL, apiKey: snapshot.emby.apiKey, serverType: .emby))
-        case .jellyfin:
-            results.append(await EmbyJellyfinService.shared.ping(serverURL: snapshot.jellyfin.serverURL, serverType: .jellyfin))
-            results.append(await EmbyJellyfinService.shared.testAPIKey(serverURL: snapshot.jellyfin.serverURL, apiKey: snapshot.jellyfin.apiKey, serverType: .jellyfin))
-        }
-        results.append(contentsOf: await OpenListService.shared.runAllTests(config: snapshot))
+        var results: [DiagnosticResult] = await mediaResults
+        results.append(contentsOf: await openListResults)
 
         results.append(DiagnosticResult(
             title: "Docker 引擎",
@@ -369,6 +341,19 @@ struct DashboardView: View {
         await MainActor.run {
             lastDiagnostics = results
             isDiagnosing = false
+        }
+    }
+
+    private static func mediaServerChecks(_ config: AppConfig) async -> [DiagnosticResult] {
+        let url = config.activeServerURL
+        switch config.mediaServerType {
+        case .plex:
+            return [await PlexService.shared.ping(serverURL: url)]
+        case .emby, .jellyfin:
+            let type = config.mediaServerType
+            async let ping = EmbyJellyfinService.shared.ping(serverURL: url, serverType: type)
+            async let key = EmbyJellyfinService.shared.testAPIKey(serverURL: url, apiKey: config.activeAPIKey, serverType: type)
+            return [await ping, await key]
         }
     }
 

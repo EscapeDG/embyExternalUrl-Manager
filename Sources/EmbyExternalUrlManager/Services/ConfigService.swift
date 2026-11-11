@@ -249,24 +249,15 @@ final class ConfigService: ObservableObject {
 
         // Build variables
         // Server specific variables
-        switch config.mediaServerType {
-        case .plex:
-            variables["PLEX_SERVER_URL"] = jsonString(config.plex.serverURL)
-            variables["PROXY_PORT"] = String(config.plex.proxyPort)
-            variables["PROXY_HTTPS_PORT"] = String(config.plex.proxyHttpsPort)
-            variables["CONTAINER_NAME"] = config.mediaServerType.containerName
-        case .emby:
-            variables["EMBY_SERVER_URL"] = jsonString(config.emby.serverURL)
-            variables["EMBY_API_KEY"] = jsonString(config.emby.apiKey)
-            variables["PROXY_PORT"] = String(config.emby.proxyPort)
-            variables["PROXY_HTTPS_PORT"] = String(config.emby.proxyHttpsPort)
-            variables["CONTAINER_NAME"] = config.mediaServerType.containerName
-        case .jellyfin:
-            variables["EMBY_SERVER_URL"] = jsonString(config.jellyfin.serverURL)
-            variables["EMBY_API_KEY"] = jsonString(config.jellyfin.apiKey)
-            variables["PROXY_PORT"] = String(config.jellyfin.proxyPort)
-            variables["PROXY_HTTPS_PORT"] = String(config.jellyfin.proxyHttpsPort)
-            variables["CONTAINER_NAME"] = config.mediaServerType.containerName
+        variables["PROXY_PORT"] = String(config.activeProxyPort)
+        variables["PROXY_HTTPS_PORT"] = String(config.activeProxyHttpsPort)
+        variables["CONTAINER_NAME"] = config.mediaServerType.containerName
+        if config.mediaServerType == .plex {
+            variables["PLEX_SERVER_URL"] = jsonString(config.activeServerURL)
+        } else {
+            // Emby 与 Jellyfin 共用上游 emby2Alist 模板变量
+            variables["EMBY_SERVER_URL"] = jsonString(config.activeServerURL)
+            variables["EMBY_API_KEY"] = jsonString(config.activeAPIKey)
         }
 
         // OpenList

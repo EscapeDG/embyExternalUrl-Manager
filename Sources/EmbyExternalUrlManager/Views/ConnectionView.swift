@@ -191,32 +191,15 @@ struct ConnectionView: View {
             }
         } else {
             if let v = scanned.serverURL ?? scanned.plexURL {
-                switch configService.config.mediaServerType {
-                case .emby:
-                    configService.config.emby.serverURL = v
-                    filled.append("Emby 地址")
-                case .jellyfin:
-                    configService.config.jellyfin.serverURL = v
-                    filled.append("Jellyfin 地址")
-                case .plex:
-                    configService.config.plex.serverURL = v
-                    filled.append("Plex 地址")
-                }
+                configService.config.activeServerURL = v
+                filled.append("\(configService.config.mediaServerType.rawValue) 地址")
             }
             if let v = scanned.proxyPort {
-                switch configService.config.mediaServerType {
-                case .emby: configService.config.emby.proxyPort = v
-                case .jellyfin: configService.config.jellyfin.proxyPort = v
-                case .plex: configService.config.plex.proxyPort = v
-                }
+                configService.config.activeProxyPort = v
                 filled.append("HTTP 端口")
             }
             if let v = scanned.proxyHttpsPort {
-                switch configService.config.mediaServerType {
-                case .emby: configService.config.emby.proxyHttpsPort = v
-                case .jellyfin: configService.config.jellyfin.proxyHttpsPort = v
-                case .plex: configService.config.plex.proxyHttpsPort = v
-                }
+                configService.config.activeProxyHttpsPort = v
                 filled.append("HTTPS 端口")
             }
         }

@@ -16,6 +16,11 @@ let package = Package(
             resources: [
                 .copy("Resources/Templates")
             ]
+        ),
+        .testTarget(
+            name: "EmbyExternalUrlManagerTests",
+            dependencies: ["EmbyExternalUrlManager"],
+            path: "Tests/EmbyExternalUrlManagerTests"
         )
     ]
 )

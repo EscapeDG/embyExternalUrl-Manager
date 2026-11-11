@@ -61,7 +61,11 @@ enum ProcessRunner {
             if !chunk.isEmpty { errBuffer.append(chunk) }
         }
 
-        let commandLine = displayLine(command, displayArguments ?? args)
+        // 退出通知代替轮询：terminationHandler 在 run() 之前设置，避免错过很快结束的进程
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+
+        let commandLine = Shell.displayLine([command] + (displayArguments ?? args))
         do {
             try process.run()
         } catch {
@@ -70,8 +74,8 @@ enum ProcessRunner {
             return CommandResult(command: commandLine, exitCode: -1, stdout: "", stderr: error.localizedDescription)
         }
 
-        let timedOut = wait(for: process, timeout: timeout)
-        if timedOut { terminate(process) }
+        let timedOut = exited.wait(timeout: .now() + timeout) == .timedOut
+        if timedOut { terminate(process, exited: exited) }
         process.waitUntilExit()
 
         outPipe.fileHandleForReading.readabilityHandler = nil
@@ -118,30 +122,11 @@ enum ProcessRunner {
         }
     }
 
-    private static func displayLine(_ command: String, _ args: [String]) -> String {
-        ([command] + args).map { token in
-            token.contains(where: { $0.isWhitespace || $0 == "'" || $0 == "\"" || $0 == "\\" })
-                ? "'\(token.replacingOccurrences(of: "'", with: "'\\''"))'"
-                : token
-        }.joined(separator: " ")
-    }
-
-    private static func wait(for process: Process, timeout: TimeInterval) -> Bool {
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        return process.isRunning
-    }
-
-    private static func terminate(_ process: Process) {
+    /// 先 SIGTERM，2 秒内没退出再 SIGKILL。
+    private static func terminate(_ process: Process, exited: DispatchSemaphore) {
         guard process.isRunning else { return }
         process.terminate()
-        let deadline = Date().addingTimeInterval(2)
-        while process.isRunning && Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        if process.isRunning {
+        if exited.wait(timeout: .now() + 2) == .timedOut, process.isRunning {
             kill(process.processIdentifier, SIGKILL)
         }
     }
@@ -153,6 +138,17 @@ enum Shell {
     /// 单引号转义，供拼接 shell 命令使用。
     static func quote(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
+    /// 仅在需要时加引号（含空白、引号或反斜杠），用于展示命令行。
+    static func displayToken(_ token: String) -> String {
+        token.contains(where: { $0.isWhitespace || $0 == "'" || $0 == "\"" || $0 == "\\" })
+            ? quote(token)
+            : token
+    }
+
+    static func displayLine(_ tokens: [String]) -> String {
+        tokens.map(displayToken).joined(separator: " ")
     }
 
     /// 在「终端」App 中执行命令（需要交互 / 可见输出的安装类操作）。

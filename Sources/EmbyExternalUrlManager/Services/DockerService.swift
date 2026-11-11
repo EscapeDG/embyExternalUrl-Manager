@@ -95,32 +95,49 @@ final class DockerService: ObservableObject {
         guard let container = await runningContainerName(mediaServerType: mediaServerType) else { return "未找到容器" }
         let result = await runCommand(["logs", "--tail", "\(tail)", container], timeout: 15)
         // nginx 把访问日志写 stdout、错误日志写 stderr，docker logs 分开返回
-        return [result.stdout, result.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+        let output = [result.stdout, result.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+        if result.exitCode != 0 || !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return output
+        }
+        // 日志目录挂到宿主机时 docker logs 为空，改读挂载的日志文件
+        if let mounted = await mountedLogs(container: container, tail: tail) {
+            return mounted
+        }
+        return "docker logs 无输出，且未找到挂载的 \(MountedLogReader.containerLogDirectory) 日志文件。"
+    }
+
+    private func mountedLogs(container: String, tail: Int) async -> String? {
+        let inspect = await runCommand(["inspect", "-f", "{{json .Mounts}}", container], timeout: 8)
+        guard inspect.exitCode == 0,
+              let directory = MountedLogReader.hostLogDirectory(mountsJSON: inspect.stdout) else { return nil }
+        return await Task.detached(priority: .userInitiated) {
+            MountedLogReader.render(directory: directory, lines: tail)
+        }.value
     }
 
     func nginxTest(mediaServerType: MediaServerType = ConfigService.shared.config.mediaServerType) async -> CommandResult {
         guard let container = await runningContainerName(mediaServerType: mediaServerType) else {
-            return CommandResult(command: "nginx -t", exitCode: -1, stdout: "", stderr: "未找到正在运行的 nginx 容器")
+            return Self.containerMissing("nginx -t")
         }
-        let result = await runCommand(["exec", container, "nginx", "-t"], timeout: 15)
-        await MainActor.run { self.lastCommandResult = result }
-        return result
+        return await nginxExec(container: container, ["-t"])
     }
 
     func reloadNginx(mediaServerType: MediaServerType = ConfigService.shared.config.mediaServerType) async -> CommandResult {
         guard let container = await runningContainerName(mediaServerType: mediaServerType) else {
-            return CommandResult(command: "nginx -s reload", exitCode: -1, stdout: "", stderr: "未找到正在运行的 nginx 容器")
+            return Self.containerMissing("nginx -s reload")
         }
-        let result = await runCommand(["exec", container, "nginx", "-s", "reload"], timeout: 15)
-        await MainActor.run { self.lastCommandResult = result }
-        return result
+        return await nginxExec(container: container, ["-s", "reload"])
     }
 
     /// 先 `nginx -t`，通过后再重载；配置有误时不重载，避免把正在运行的 nginx 搞挂。
+    /// 容器名只查一次，两步共用。
     func testAndReloadNginx(mediaServerType: MediaServerType = ConfigService.shared.config.mediaServerType) async -> CommandResult {
-        let test = await nginxTest(mediaServerType: mediaServerType)
+        guard let container = await runningContainerName(mediaServerType: mediaServerType) else {
+            return Self.containerMissing("nginx -t")
+        }
+        let test = await nginxExec(container: container, ["-t"])
         guard test.exitCode == 0 else { return test }
-        return await reloadNginx(mediaServerType: mediaServerType)
+        return await nginxExec(container: container, ["-s", "reload"])
     }
 
     func composeConfig(directory: String) async -> CommandResult {
@@ -130,6 +147,16 @@ final class DockerService: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private static func containerMissing(_ command: String) -> CommandResult {
+        CommandResult(command: command, exitCode: -1, stdout: "", stderr: "未找到正在运行的 nginx 容器")
+    }
+
+    private func nginxExec(container: String, _ nginxArgs: [String]) async -> CommandResult {
+        let result = await runCommand(["exec", container, "nginx"] + nginxArgs, timeout: 15)
+        await MainActor.run { self.lastCommandResult = result }
+        return result
+    }
 
     /// 当前媒体类型对应的、正在运行的 nginx 容器名。
     private func runningContainerName(mediaServerType: MediaServerType) async -> String? {

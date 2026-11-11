@@ -65,13 +65,7 @@ enum DeploymentPipeline {
         }
 
         // 2. Paths / server address
-        let serverURL: String = {
-            switch config.mediaServerType {
-            case .plex: return config.plex.serverURL
-            case .emby: return config.emby.serverURL
-            case .jellyfin: return config.jellyfin.serverURL
-            }
-        }()
+        let serverURL = config.activeServerURL
         let openListOK = !config.openList.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let serverOK = !serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if serverOK && openListOK {

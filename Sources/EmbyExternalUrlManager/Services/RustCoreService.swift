@@ -72,9 +72,7 @@ final class RustCoreService: @unchecked Sendable {
     }
 
     private func maskedCommand(executablePath: String = "plex2alist-core", arguments: [String]) -> String {
-        ([executablePath] + masked(arguments: arguments))
-            .map(displayToken)
-            .joined(separator: " ")
+        Shell.displayLine([executablePath] + masked(arguments: arguments))
     }
 
     private func masked(arguments: [String]) -> [String] {
@@ -88,15 +86,5 @@ final class RustCoreService: @unchecked Sendable {
             }
         }
         return output
-    }
-
-    private func displayToken(_ token: String) -> String {
-        if token.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
-            || token.contains("'")
-            || token.contains("\"")
-            || token.contains("\\") {
-            return "'\(token.replacingOccurrences(of: "'", with: "'\\''"))'"
-        }
-        return token
     }
 }

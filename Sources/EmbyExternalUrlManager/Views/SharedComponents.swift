@@ -243,37 +243,10 @@ struct MediaServerEditor: View {
         }
     }
 
-    private var serverURLBinding: Binding<String> {
-        switch configService.config.mediaServerType {
-        case .plex: return $configService.config.plex.serverURL
-        case .emby: return $configService.config.emby.serverURL
-        case .jellyfin: return $configService.config.jellyfin.serverURL
-        }
-    }
-
-    private var apiKeyBinding: Binding<String> {
-        switch configService.config.mediaServerType {
-        case .plex: return .constant("")
-        case .emby: return $configService.config.emby.apiKey
-        case .jellyfin: return $configService.config.jellyfin.apiKey
-        }
-    }
-
-    private var httpPortBinding: Binding<Int> {
-        switch configService.config.mediaServerType {
-        case .plex: return $configService.config.plex.proxyPort
-        case .emby: return $configService.config.emby.proxyPort
-        case .jellyfin: return $configService.config.jellyfin.proxyPort
-        }
-    }
-
-    private var httpsPortBinding: Binding<Int> {
-        switch configService.config.mediaServerType {
-        case .plex: return $configService.config.plex.proxyHttpsPort
-        case .emby: return $configService.config.emby.proxyHttpsPort
-        case .jellyfin: return $configService.config.jellyfin.proxyHttpsPort
-        }
-    }
+    private var serverURLBinding: Binding<String> { $configService.config.activeServerURL }
+    private var apiKeyBinding: Binding<String> { $configService.config.activeAPIKey }
+    private var httpPortBinding: Binding<Int> { $configService.config.activeProxyPort }
+    private var httpsPortBinding: Binding<Int> { $configService.config.activeProxyHttpsPort }
 }
 
 // MARK: - Form Field Component

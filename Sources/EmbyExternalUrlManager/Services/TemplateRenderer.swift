@@ -5,28 +5,30 @@ import Foundation
 final class TemplateRenderer {
     static let shared = TemplateRenderer()
 
-    /// Replace `{{VARIABLE}}` placeholders in template text with values from `variables`.
+    private static let placeholder = try! NSRegularExpression(pattern: #"\{\{(\w+)\}\}"#)
+
+    /// 单次扫描替换 `{{VARIABLE}}` 占位符。
+    /// 替换进去的值不会再被扫描：值里含 `{{X}}` 时既不会被二次替换，也不会被当成未解析。
+    /// 未知占位符原样保留，按出现顺序去重后返回。
     /// Returns (renderedText, unresolvedKeys).
     func render(template: String, variables: [String: String]) -> (String, [String]) {
-        var result = template
+        let ns = template as NSString
+        var result = ""
         var unresolved: [String] = []
+        var cursor = 0
 
-        for (key, value) in variables {
-            result = result.replacingOccurrences(of: "{{\(key)}}", with: value)
-        }
-
-        // Check for any remaining placeholders
-        let pattern = #"\{\{(\w+)\}\}"#
-        if let regex = try? NSRegularExpression(pattern: pattern) {
-            let range = NSRange(result.startIndex..., in: result)
-            let matches = regex.matches(in: result, range: range)
-            for match in matches {
-                if let r = Range(match.range(at: 1), in: result) {
-                    unresolved.append(String(result[r]))
-                }
+        for match in Self.placeholder.matches(in: template, range: NSRange(location: 0, length: ns.length)) {
+            result += ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
+            let key = ns.substring(with: match.range(at: 1))
+            if let value = variables[key] {
+                result += value
+            } else {
+                result += ns.substring(with: match.range)
+                if !unresolved.contains(key) { unresolved.append(key) }
             }
+            cursor = match.range.location + match.range.length
         }
-
+        result += ns.substring(from: cursor)
         return (result, unresolved)
     }
 

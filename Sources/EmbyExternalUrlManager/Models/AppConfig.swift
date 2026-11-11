@@ -155,6 +155,80 @@ struct AppConfig: Codable, Equatable {
     }
 }
 
+// MARK: - Active media server accessors
+
+/// 按当前 `mediaServerType` 读写对应服务器的字段，避免各处重复 switch。
+extension AppConfig {
+    var activeServerURL: String {
+        get {
+            switch mediaServerType {
+            case .plex: return plex.serverURL
+            case .emby: return emby.serverURL
+            case .jellyfin: return jellyfin.serverURL
+            }
+        }
+        set {
+            switch mediaServerType {
+            case .plex: plex.serverURL = newValue
+            case .emby: emby.serverURL = newValue
+            case .jellyfin: jellyfin.serverURL = newValue
+            }
+        }
+    }
+
+    /// Plex 不使用 API Key：读取恒为空，写入忽略。
+    var activeAPIKey: String {
+        get {
+            switch mediaServerType {
+            case .plex: return ""
+            case .emby: return emby.apiKey
+            case .jellyfin: return jellyfin.apiKey
+            }
+        }
+        set {
+            switch mediaServerType {
+            case .plex: break
+            case .emby: emby.apiKey = newValue
+            case .jellyfin: jellyfin.apiKey = newValue
+            }
+        }
+    }
+
+    var activeProxyPort: Int {
+        get {
+            switch mediaServerType {
+            case .plex: return plex.proxyPort
+            case .emby: return emby.proxyPort
+            case .jellyfin: return jellyfin.proxyPort
+            }
+        }
+        set {
+            switch mediaServerType {
+            case .plex: plex.proxyPort = newValue
+            case .emby: emby.proxyPort = newValue
+            case .jellyfin: jellyfin.proxyPort = newValue
+            }
+        }
+    }
+
+    var activeProxyHttpsPort: Int {
+        get {
+            switch mediaServerType {
+            case .plex: return plex.proxyHttpsPort
+            case .emby: return emby.proxyHttpsPort
+            case .jellyfin: return jellyfin.proxyHttpsPort
+            }
+        }
+        set {
+            switch mediaServerType {
+            case .plex: plex.proxyHttpsPort = newValue
+            case .emby: emby.proxyHttpsPort = newValue
+            case .jellyfin: jellyfin.proxyHttpsPort = newValue
+            }
+        }
+    }
+}
+
 // MARK: - Plex Settings
 
 struct PlexSettings: Codable, Equatable {
